@@ -37,7 +37,7 @@ def get_queue(name: str | None = None) -> Queue:
 
 def enqueue_process_job(job_id: str, csv_path: str) -> Any:
     """Enqueue the :func:`app.worker.process_job` task. Returns the RQ Job."""
-    from app.worker import process_job  # late import — avoids worker boot loop
+    from app.services.worker import process_job  # late import — avoids worker boot loop
 
     queue = get_queue()
     rq_job = queue.enqueue(process_job, job_id, csv_path)

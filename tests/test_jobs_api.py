@@ -18,7 +18,7 @@ def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
     # Reset the in-memory store between tests
     from app.dependencies import set_job_store
-    from app.storage import InMemoryJobStore
+    from app.adapters.storage import InMemoryJobStore
 
     set_job_store(InMemoryJobStore())
 
@@ -46,9 +46,9 @@ SAMPLE_CSV = (
 
 def test_upload_returns_202_and_runs_worker_inline() -> None:
     """Upload -> 202 -> we run the worker inline so status reaches completed."""
-    from app import llm
-    from app import queue as queue_module
-    from app.worker import process_job
+    from app.services import llm
+    from app.adapters import queue as queue_module
+    from app.services.worker import process_job
 
     # Patch enqueue to run the worker synchronously inside the test.
     def sync_enqueue(job_id, csv_path):

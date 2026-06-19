@@ -16,10 +16,10 @@ import logging
 from datetime import date as _date
 from typing import Any
 
-from app.anomaly import flag_anomalies
-from app.etl import run_etl
-from app.fx import to_inr
-from app.storage import _aggregate_by_currency, _build_top_merchants
+from app.services.anomaly import flag_anomalies
+from app.services.etl import run_etl
+from app.services.fx import to_inr
+from app.adapters.storage import _aggregate_by_currency, _build_top_merchants
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,7 @@ def _ensure_store() -> None:
 
         settings = get_settings()
         if settings.app_env == "test" or settings.use_in_memory_store:
-            from app.storage import InMemoryJobStore
+            from app.adapters.storage import InMemoryJobStore
 
             set_job_store(InMemoryJobStore())
         else:
@@ -82,7 +82,7 @@ def _ensure_store() -> None:
 
             engine = get_engine()
             Base.metadata.create_all(bind=engine)
-            from app.storage import SqlJobStore
+            from app.adapters.storage import SqlJobStore
 
             set_job_store(SqlJobStore(get_session_factory()))
         logger.info("Initialized JobStore for worker: %s", type(get_job_store()).__name__)
@@ -90,10 +90,10 @@ def _ensure_store() -> None:
 
 def process_job(job_id: str, csv_path: str) -> dict[str, Any]:
     """RQ task. Returns a small dict for the RQ log; persistent state lives in the DB."""
-    from app import llm
+    from app.services import llm
     from app.config import get_settings
     from app.dependencies import get_job_store
-    from app.upload import cleanup
+    from app.services.upload import cleanup
 
     _ensure_store()
     settings = get_settings()

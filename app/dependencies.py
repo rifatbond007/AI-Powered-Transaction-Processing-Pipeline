@@ -6,7 +6,7 @@ main app wires up a concrete implementation in :mod:`app.main`.
 
 from __future__ import annotations
 
-from app.storage import JobStore
+from app.adapters.storage import JobStore
 
 # Module-level reference; :func:`set_job_store` rebinds it during app startup.
 _store: JobStore | None = None

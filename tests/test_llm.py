@@ -26,7 +26,7 @@ def test_classify_categories_batched() -> None:
         call_count["n"] += 1
         return {"categories": ["Food"] * len(batch), "raw": "stub"}
 
-    from app import llm
+    from app.services import llm
 
     with patch.object(llm, "_classify_call", side_effect=fake_classify):
         out = llm.classify_categories(rows)
@@ -45,7 +45,7 @@ def test_classify_categories_marks_batch_failed_on_error() -> None:
         {"merchant": "X", "amount": 1.0, "currency": "INR", "account_id": "A"} for _ in range(3)
     ]
 
-    from app import llm
+    from app.services import llm
 
     with patch.object(llm, "_classify_call", return_value={"llm_failed": True, "error": "boom"}):
         out = llm.classify_categories(rows)
@@ -59,7 +59,7 @@ def test_classify_categories_marks_batch_failed_on_error() -> None:
 def test_generate_summary_returns_dict() -> None:
     payload = {"total_spend_by_currency": {"INR": 100.0}, "anomaly_count": 0}
 
-    from app import llm
+    from app.services import llm
 
     fake = {
         "narrative": "All good.",
@@ -73,26 +73,26 @@ def test_generate_summary_returns_dict() -> None:
 
 
 def test_extract_json_handles_fenced_response() -> None:
-    from app.llm import _extract_json
+    from app.services.llm import _extract_json
 
     raw = "```json\n" + json.dumps({"x": 1}) + "\n```"
     assert _extract_json(raw) == {"x": 1}
 
 
 def test_extract_json_handles_bare_object() -> None:
-    from app.llm import _extract_json
+    from app.services.llm import _extract_json
 
     assert _extract_json(json.dumps({"x": 1})) == {"x": 1}
 
 
 def test_extract_json_handles_prose_embedded() -> None:
-    from app.llm import _extract_json
+    from app.services.llm import _extract_json
 
     assert _extract_json("Sure! Here: " + json.dumps([1, 2, 3])) == [1, 2, 3]
 
 
 def test_coerce_category_unknown_falls_back_to_other() -> None:
-    from app.llm import _coerce_category
+    from app.services.llm import _coerce_category
 
     assert _coerce_category("Refunds") == "Other"
     assert _coerce_category("food") == "Food"  # case-insensitive

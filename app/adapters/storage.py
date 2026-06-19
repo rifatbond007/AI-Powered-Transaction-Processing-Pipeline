@@ -409,7 +409,7 @@ class SqlJobStore(JobStore):
 
 def _build_top_merchants(rows: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
     """Aggregate top merchants by INR total. Pure helper (used by worker)."""
-    from app.fx import to_inr
+    from app.services.fx import to_inr
 
     totals: dict[str, float] = defaultdict(float)
     for r in rows:

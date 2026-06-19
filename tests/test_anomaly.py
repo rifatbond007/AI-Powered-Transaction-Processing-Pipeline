@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.anomaly import (
+from app.services.anomaly import (
     DOMESTIC_BRANDS,
     REASON_AMOUNT_3X_MEDIAN,
     REASON_USD_DOMESTIC,

@@ -55,6 +55,6 @@ def real_csv_path() -> Path:
 @pytest.fixture()
 def in_memory_store():
     """A fresh in-memory JobStore for tests that need the store directly."""
-    from app.storage import InMemoryJobStore
+    from app.adapters.storage import InMemoryJobStore
 
     return InMemoryJobStore()

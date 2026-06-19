@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.etl import run_etl
+from app.services.etl import run_etl
 
 
 def test_clean_rows_count(sample_csv_path) -> None:

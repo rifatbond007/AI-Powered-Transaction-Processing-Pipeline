@@ -31,9 +31,9 @@ def _fake_summarize(_payload):
 
 def test_worker_processes_csv_end_to_end(sample_csv_path) -> None:
     """Worker reads CSV -> cleans -> flags anomalies -> classifies -> summarises -> persists."""
-    from app import llm, worker
+    from app.services import llm, worker
     from app.dependencies import get_job_store
-    from app.storage import InMemoryJobStore
+    from app.adapters.storage import InMemoryJobStore
 
     store = InMemoryJobStore()
     get_job_store.__globals__["_store"] = store  # type: ignore[attr-defined]
@@ -67,8 +67,8 @@ def test_worker_processes_csv_end_to_end(sample_csv_path) -> None:
 
 def test_worker_marks_job_failed_on_etl_error(tmp_path) -> None:
     import app.dependencies as deps
-    from app import worker
-    from app.storage import InMemoryJobStore
+    from app.services import worker
+    from app.adapters.storage import InMemoryJobStore
 
     store = InMemoryJobStore()
     deps._store = store
@@ -88,8 +88,8 @@ def test_worker_marks_job_failed_on_etl_error(tmp_path) -> None:
 def test_worker_marks_llm_failure_does_not_fail_job(sample_csv_path) -> None:
     """PDF §5(e): a failed LLM call marks the batch llm_failed, not the whole job."""
     import app.dependencies as deps
-    from app import llm, worker
-    from app.storage import InMemoryJobStore
+    from app.services import llm, worker
+    from app.adapters.storage import InMemoryJobStore
 
     store = InMemoryJobStore()
     deps._store = store
@@ -122,8 +122,8 @@ def test_worker_marks_llm_failure_does_not_fail_job(sample_csv_path) -> None:
 def test_upload_cleanup_runs_on_success(sample_csv_path, tmp_path, monkeypatch) -> None:
     """After the worker finishes, the temp upload file is removed."""
     import app.dependencies as deps
-    from app import llm, worker
-    from app.storage import InMemoryJobStore
+    from app.services import llm, worker
+    from app.adapters.storage import InMemoryJobStore
 
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
