@@ -45,7 +45,4 @@ def enqueue_process_job(job_id: str, csv_path: str) -> Any:
     return rq_job
 
 
-def reset_for_tests() -> None:
-    """Drop the cached Redis client. Used by tests."""
-    global _redis
-    _redis = None
+

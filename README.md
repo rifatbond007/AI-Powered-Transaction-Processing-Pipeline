@@ -28,12 +28,10 @@ flowchart LR
   API -->|enqueue| RQ[(Redis 7<br/>RQ queue)]
   RQ --> Worker[RQ Worker<br/>app/worker.py]
   Worker --> ETL[ETL<br/>app/etl.py]
-  ETL --> Anomaly[Anomaly<br/>app/anomaly.py]
-  Anomaly --> LLM[Gemini 1.5 Flash<br/>app/llm.py]
-  LLM --> Store[JobStore<br/>interface]
-  Store --> IM[InMemoryJobStore]
-  Store --> SQL[SqlJobStore]
-  SQL -->|SQLAlchemy 2.x| PG[(PostgreSQL 16)]
+  ETL --> Anomaly[Anomaly<br/>app/services/anomaly.py]
+  Anomaly --> LLM[Gemini 2.5 Flash<br/>app/services/llm.py]
+  LLM --> Store[SqlJobStore<br/>app/adapters/storage.py]
+  Store -->|SQLAlchemy 2.x| PG[(PostgreSQL 16)]
   Client[HTTP Client] -->|poll| API
   API --> Store
 ```
@@ -207,22 +205,31 @@ Tests use:
 │   ├── database.py         # SQLAlchemy engine + session
 │   ├── models.py           # ORM models (Job, Transaction, JobSummary)
 │   ├── schemas.py          # Pydantic request/response models
-│   ├── etl.py              # ETL pipeline (cleaning only)
-│   ├── anomaly.py          # 3x-median + USD-domestic anomaly rules
-│   ├── llm.py              # Gemini classifier + summary (retried)
-│   ├── queue.py            # RQ get_queue + enqueue_process_job
-│   ├── upload.py           # CSV upload lifecycle (save + cleanup)
-│   ├── worker.py           # RQ task: process_job
-│   ├── fx.py               # Static rates + to_inr helper
-│   ├── storage.py          # JobStore ABC + InMemory + Sql impls
 │   ├── dependencies.py     # FastAPI DI helpers
-│   └── routes/
-│       ├── health.py
-│       └── jobs.py         # /jobs/upload, /jobs, /jobs/{id}/{status,results}
+│   ├── adapters/
+│   │   ├── queue.py        # RQ get_queue + enqueue_process_job
+│   │   └── storage.py      # SqlJobStore (Postgres/SQLite)
+│   ├── routes/
+│   │   ├── health.py
+│   │   └── jobs.py         # /jobs/upload, /jobs, /jobs/{id}/{status,results}
+│   └── services/
+│       ├── anomaly.py      # 3x-median + USD-domestic anomaly rules
+│       ├── etl.py          # ETL pipeline (cleaning only)
+│       ├── fx.py           # Static rates + to_inr helper
+│       ├── llm.py          # Gemini classifier + summary (retried)
+│       ├── upload.py       # CSV upload lifecycle (save + cleanup)
+│       └── worker.py       # RQ task: process_job
 ├── scripts/
 │   ├── init_db.py          # Schema-only (drop_all + create_all)
 │   └── entrypoint.py       # Container entrypoint (wait + exec)
-├── tests/                  # pytest suite (32 tests)
+├── tests/                  # pytest suite (35 tests)
+│   ├── conftest.py
+│   ├── test_anomaly.py
+│   ├── test_api.py
+│   ├── test_etl.py
+│   ├── test_jobs_api.py
+│   ├── test_llm.py
+│   └── test_worker_pipeline.py
 ├── .github/workflows/
 │   └── ci.yml              # CI: lint + test + docker build
 ├── Dockerfile              # Multi-stage, non-root, healthcheck
@@ -231,7 +238,6 @@ Tests use:
 ├── pyproject.toml          # ruff + pytest config
 ├── requirements.txt        # Runtime deps
 ├── requirements-dev.txt    # Test deps
-├── Backend_DevOps_Assignment.pdf  # The authoritative spec
 └── README.md
 ```
 
@@ -240,7 +246,7 @@ Tests use:
 | Decision | Rationale |
 | -------- | --------- |
 | **RQ + Redis (not Celery)** | RQ is simpler, pure-Python, and matches the small surface area of this app. Celery is overkill for one queue type. |
-| **Gemini 1.5 Flash (not OpenAI)** | Free tier, no spend. Matches the assignment's "no spend required" constraint. |
+| **Gemini 2.5 Flash (not OpenAI)** | Free tier, no spend. Matches the assignment's "no spend required" constraint. |
 | **Job-based async (not synchronous)** | LLM calls + ETL can take seconds. Returning a `job_id` and letting the client poll is the right UX. |
 | **Pluggable `JobStore` interface** | Routes and worker don't care about storage. Tests use in-memory; prod uses Postgres. |
 | **Pydantic v2** | 5-50x faster than v1, better type inference, native discriminated unions. |

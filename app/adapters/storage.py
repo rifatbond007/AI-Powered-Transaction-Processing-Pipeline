@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
@@ -91,26 +90,6 @@ class JobStore(ABC):
 # --------------------------------------------------------------------------- #
 # SQL implementation
 # --------------------------------------------------------------------------- #
-
-
-def _serialize_txn(t: Transaction) -> dict[str, Any]:
-    return {
-        "id": t.id,
-        "job_id": t.job_id,
-        "txn_id": t.txn_id,
-        "date": t.date.isoformat(),
-        "merchant": t.merchant,
-        "amount": t.amount,
-        "currency": t.currency,
-        "status": t.status or "",
-        "category": t.category or "Uncategorised",
-        "account_id": t.account_id or "",
-        "is_anomaly": bool(t.is_anomaly),
-        "anomaly_reason": t.anomaly_reason,
-        "llm_category": t.llm_category,
-        "llm_raw_response": t.llm_raw_response,
-        "llm_failed": bool(t.llm_failed),
-    }
 
 
 class SqlJobStore(JobStore):
@@ -277,19 +256,4 @@ class SqlJobStore(JobStore):
         }
 
 
-def _build_top_merchants(rows: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
-    """Aggregate top merchants by INR total. Pure helper (used by worker)."""
-    from app.services.fx import to_inr
 
-    totals: dict[str, float] = defaultdict(float)
-    for r in rows:
-        totals[r.get("merchant") or "UNKNOWN"] += to_inr(r["amount"], r["currency"])
-    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:limit]
-    return [{"merchant": m, "total_inr": round(v, 2)} for m, v in ranked]
-
-
-def _aggregate_by_currency(rows: list[dict[str, Any]]) -> dict[str, float]:
-    totals: dict[str, float] = defaultdict(float)
-    for r in rows:
-        totals[r["currency"]] += r["amount"]
-    return {k: round(v, 2) for k, v in totals.items()}

@@ -39,18 +39,4 @@ def get_session_factory() -> sessionmaker[Session]:
     return _SessionLocal
 
 
-def reset_for_tests() -> None:
-    """Drop the engine / factory singletons. Used by tests."""
-    global _engine, _SessionLocal
-    if _engine is not None:
-        _engine.dispose()
-    _engine = None
-    _SessionLocal = None
 
-
-def create_all_tables() -> None:
-    """Create all tables. Used by ``scripts/init_db.py`` and tests."""
-    from app import models
-
-    engine = get_engine()
-    models.Base.metadata.create_all(bind=engine)

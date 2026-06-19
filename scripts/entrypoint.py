@@ -100,7 +100,6 @@ def main() -> int:
         cmd = os.getenv("CMD", "uvicorn app.main:app --host 0.0.0.0 --port 8000")
     logger.info("Starting: %s", cmd)
     os.execvp("sh", ["sh", "-c", cmd])
-    return 0  # unreachable
 
 
 if __name__ == "__main__":

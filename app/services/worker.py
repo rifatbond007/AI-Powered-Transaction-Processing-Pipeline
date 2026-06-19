@@ -13,27 +13,31 @@ errors mark the job ``failed``.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from datetime import date as _date
 from typing import Any
 
-from app.adapters.storage import _aggregate_by_currency, _build_top_merchants
 from app.services.anomaly import flag_anomalies
 from app.services.etl import run_etl
 from app.services.fx import to_inr
 
 logger = logging.getLogger(__name__)
 
-# Subset of categories the PDF allows for LLM classification (§5(c)).
-PDF_CATEGORIES: tuple[str, ...] = (
-    "Food",
-    "Shopping",
-    "Travel",
-    "Transport",
-    "Utilities",
-    "Cash Withdrawal",
-    "Entertainment",
-    "Other",
-)
+
+def _build_top_merchants(rows: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    """Aggregate top merchants by INR total."""
+    totals: dict[str, float] = defaultdict(float)
+    for r in rows:
+        totals[r.get("merchant") or "UNKNOWN"] += to_inr(r["amount"], r["currency"])
+    ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:limit]
+    return [{"merchant": m, "total_inr": round(v, 2)} for m, v in ranked]
+
+
+def _aggregate_by_currency(rows: list[dict[str, Any]]) -> dict[str, float]:
+    totals: dict[str, float] = defaultdict(float)
+    for r in rows:
+        totals[r["currency"]] += r["amount"]
+    return {k: round(v, 2) for k, v in totals.items()}
 
 
 def _persist_transactions(store, job_id: str, rows: list[dict[str, Any]]) -> None:
