@@ -46,7 +46,7 @@ is the production default.
 git clone https://github.com/rifatbond007/AI-Powered-Transaction-Processing-Pipeline.git
 cd AI-Powered-Transaction-Processing-Pipeline
 cp .env.example .env
-make docker-up      # or: docker compose up -d
+make up             # or: docker compose up -d
 ```
 
 Wait ~10 seconds for the stack to be healthy, then:
@@ -58,12 +58,29 @@ curl http://localhost:8000/health
 
 Interactive API docs: <http://localhost:8000/docs>
 
-### Option 2: Local Python
+### Option 1b: Local Python with Docker-backed services
+
+If you want fast code iteration but still want real Postgres/Redis:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
+# Terminal 1 — start only Postgres + Redis (no API container)
+docker compose up -d postgres redis
+
+# Terminal 2 — run the API locally against those services
+source .venv/bin/activate
+export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/transactions
+export REDIS_URL=redis://localhost:6380/0
+make dev
+```
+
+### Option 2: Local Python (in-memory store, no services)
+
+For quick dev iteration without any external services:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
 make install
-make run            # uvicorn app.main:app --reload  (in-memory store)
+make dev            # uvicorn app.main:app --reload  (in-memory store)
 ```
 
 The in-memory store auto-loads `transactions.csv` from the project root.
@@ -138,17 +155,20 @@ The pipeline (`app/etl.py`) is defensive by design — bad rows go to a
 Common commands (or use `make <target>`):
 
 ```bash
-make install      # install all deps
-make lint         # ruff check
-make format       # auto-format
-make test         # run pytest
-make test-cov     # run pytest with coverage
-make run          # run API locally (in-memory store)
-make docker-up    # start full stack
-make docker-down  # stop stack + wipe DB
-make docker-logs  # tail logs
-make clean        # remove build artifacts
+make help        # show all available targets
+make install     # install all deps (requires active venv)
+make lint        # ruff check
+make format      # auto-format
+make test        # run pytest
+make test-cov    # run pytest with coverage
+make up          # start full stack via Docker (api + postgres + redis)
+make down        # stop stack and wipe DB volume
+make logs        # tail logs from all services
+make dev         # run API locally with in-memory store (no Docker needed)
+make clean       # remove build artifacts
 ```
+
+Run `make help` any time to see the full list.
 
 ## Testing
 
