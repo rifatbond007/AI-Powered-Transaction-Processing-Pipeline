@@ -1,0 +1,63 @@
+# =============================================================================
+# Local development stack: API + Postgres + Redis.
+# Run: docker compose up --build
+# Stop: docker compose down -v   (the -v wipes the DB volume for a clean slate)
+# =============================================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tx-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: transactions
+    ports:
+      - "5433:5432"   # host 5433 -> container 5432 (host 5432 is taken)
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d transactions"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tx-redis
+    ports:
+      - "6380:6379"   # host 6380 -> container 6379 (host 6379 is taken)
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tx-api
+    environment:
+      APP_ENV: production
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/transactions
+      REDIS_URL: redis://redis:6379/0
+      CSV_PATH: /app/transactions.csv
+      SUMMARY_CACHE_TTL: 60
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./transactions.csv:/app/transactions.csv:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    name: tx-pgdata

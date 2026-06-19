@@ -38,12 +38,12 @@ async def lifespan(app: FastAPI):
         try:
             from sqlalchemy import inspect
 
-            from app.database import get_session_factory
-            from app.models import Base
+            from app.database import get_engine, get_session_factory
+            from app.models import Base, Transaction
 
-            engine = get_session_factory().get_bind()
+            engine = get_engine()
             inspector = inspect(engine)
-            if not inspector.has_table(Base.metadata.tables["transactions"]):
+            if not inspector.has_table(Transaction.__tablename__):
                 logger.info("Transactions table missing — creating schema")
                 Base.metadata.create_all(bind=engine)
             store = SqlTransactionStore(get_session_factory())

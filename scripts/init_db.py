@@ -15,7 +15,7 @@ from pathlib import Path
 # Make the project root importable when run as ``python scripts/init_db.py``.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app import models  # noqa: F401  (imports register ORM models)
+from app import models  # registers ORM models on import
 from app.config import get_settings
 from app.database import get_engine, get_session_factory
 from app.etl import run_etl
