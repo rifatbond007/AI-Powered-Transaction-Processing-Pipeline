@@ -134,10 +134,10 @@ def process_job(job_id: str, csv_path: str) -> dict[str, Any]:
         payload = _build_summary_payload(rows, anomaly_count)
         narrative = llm.generate_summary(payload)
         if narrative.get("llm_failed"):
-            # Use a safe placeholder; job still completes.
+            risk_level = "high" if anomaly_count > 3 else ("medium" if anomaly_count > 0 else "low")
             narrative_out = {
                 "narrative": "LLM narrative unavailable.",
-                "risk_level": "low",
+                "risk_level": risk_level,
                 "top_3_merchants": payload["top_3_merchants"],
             }
         else:
