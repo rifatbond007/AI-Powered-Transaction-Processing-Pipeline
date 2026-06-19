@@ -46,7 +46,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/transactions
       REDIS_URL: redis://redis:6379/0
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      LLM_MODEL: gemini-1.5-flash
+      LLM_MODEL: gemini-2.5-flash
       LLM_BATCH_SIZE: "20"
       RQ_QUEUE_NAME: default
       UPLOAD_DIR: /tmp/uploads
@@ -62,6 +62,20 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: tx-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   worker:
     build:
       context: .
@@ -73,7 +87,7 @@ services:
       DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/transactions
       REDIS_URL: redis://redis:6379/0
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      LLM_MODEL: gemini-1.5-flash
+      LLM_MODEL: gemini-2.5-flash
       LLM_BATCH_SIZE: "20"
       RQ_QUEUE_NAME: default
       UPLOAD_DIR: /tmp/uploads

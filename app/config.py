@@ -30,9 +30,9 @@ class Settings(BaseSettings):
     rq_queue_name: str = Field(default="default", alias="RQ_QUEUE_NAME")
     worker_concurrency: int = Field(default=1, alias="WORKER_CONCURRENCY")
 
-    # ---- LLM (Gemini 1.5 Flash via google-generativeai) ----
+    # ---- LLM (Gemini via google-genai) ----
     google_api_key: str = Field(default="", alias="GOOGLE_API_KEY")
-    llm_model: str = Field(default="gemini-1.5-flash", alias="LLM_MODEL")
+    llm_model: str = Field(default="gemini-2.5-flash", alias="LLM_MODEL")
     llm_batch_size: int = Field(default=20, alias="LLM_BATCH_SIZE")
 
     # ---- Uploads ----

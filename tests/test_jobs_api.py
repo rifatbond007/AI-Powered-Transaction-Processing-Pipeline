@@ -118,3 +118,62 @@ def test_list_jobs_returns_created_job() -> None:
     data = r.json()
     assert data["total"] == 2
     assert len(data["items"]) == 2
+
+
+def test_list_jobs_filters_by_status() -> None:
+    from app.dependencies import get_job_store
+
+    store = get_job_store()
+    j1 = store.create_job(filename="pending.csv", row_count_raw=5)
+    store.set_job_status(j1.id, "pending")
+    j2 = store.create_job(filename="completed.csv", row_count_raw=5)
+    store.set_job_status(j2.id, "completed", row_count_clean=5)
+
+    with TestClient(__import__("app.main", fromlist=["app"]).app) as client:
+        r = client.get("/jobs?status=completed")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["total"] == 1
+    assert data["items"][0]["job_id"] == j2.id
+
+
+def test_status_includes_summary_when_completed() -> None:
+    """GET /jobs/{id}/status includes high-level summary when job is completed."""
+    from app.dependencies import get_job_store
+
+    store = get_job_store()
+    job = store.create_job(filename="test.csv", row_count_raw=5)
+    store.set_job_status(job.id, "completed", row_count_clean=5)
+    store.attach_summary(
+        {
+            "job_id": job.id,
+            "total_spend_inr": 1000.0,
+            "total_spend_usd": 12.02,
+            "top_merchants": [{"merchant": "X", "total_inr": 1000.0}],
+            "anomaly_count": 1,
+            "narrative": "Routine.",
+            "risk_level": "low",
+        }
+    )
+
+    with TestClient(__import__("app.main", fromlist=["app"]).app) as client:
+        r = client.get(f"/jobs/{job.id}/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "completed"
+    assert body["summary"] is not None
+    assert body["summary"]["total_spend_inr"] == 1000.0
+    assert body["summary"]["anomaly_count"] == 1
+    assert body["summary"]["risk_level"] == "low"
+
+
+def test_status_no_summary_when_pending() -> None:
+    from app.dependencies import get_job_store
+
+    store = get_job_store()
+    job = store.create_job(filename="pending.csv", row_count_raw=0)
+
+    with TestClient(__import__("app.main", fromlist=["app"]).app) as client:
+        r = client.get(f"/jobs/{job.id}/status")
+    assert r.status_code == 200
+    assert r.json()["summary"] is None

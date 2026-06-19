@@ -62,6 +62,32 @@ def _build_summary_payload(rows: list[dict[str, Any]], anomaly_count: int) -> di
     }
 
 
+def _ensure_store() -> None:
+    """Initialize the JobStore if not already registered (worker runs outside FastAPI)."""
+    from app.dependencies import get_job_store, set_job_store
+
+    try:
+        get_job_store()
+    except RuntimeError:
+        from app.config import get_settings
+
+        settings = get_settings()
+        if settings.app_env == "test" or settings.use_in_memory_store:
+            from app.storage import InMemoryJobStore
+
+            set_job_store(InMemoryJobStore())
+        else:
+            from app.database import get_engine, get_session_factory
+            from app.models import Base
+
+            engine = get_engine()
+            Base.metadata.create_all(bind=engine)
+            from app.storage import SqlJobStore
+
+            set_job_store(SqlJobStore(get_session_factory()))
+        logger.info("Initialized JobStore for worker: %s", type(get_job_store()).__name__)
+
+
 def process_job(job_id: str, csv_path: str) -> dict[str, Any]:
     """RQ task. Returns a small dict for the RQ log; persistent state lives in the DB."""
     from app import llm
@@ -69,6 +95,7 @@ def process_job(job_id: str, csv_path: str) -> dict[str, Any]:
     from app.dependencies import get_job_store
     from app.upload import cleanup
 
+    _ensure_store()
     settings = get_settings()
     store = get_job_store()
     out: dict[str, Any] = {"job_id": job_id, "rows": 0, "llm_failures": 0}

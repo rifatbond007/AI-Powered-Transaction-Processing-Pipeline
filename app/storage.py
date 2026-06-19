@@ -84,8 +84,10 @@ class JobStore(ABC):
         """Return the number of transactions persisted for a job."""
 
     @abstractmethod
-    def list_jobs(self, *, limit: int = 50, offset: int = 0) -> tuple[list[Job], int]:
-        """Return (jobs, total) — newest first."""
+    def list_jobs(
+        self, *, limit: int = 50, offset: int = 0, status: str | None = None
+    ) -> tuple[list[Job], int]:
+        """Return (jobs, total) — newest first. Optionally filter by status."""
 
 
 # --------------------------------------------------------------------------- #
@@ -185,8 +187,12 @@ class InMemoryJobStore(JobStore):
     def count_transactions(self, job_id: str) -> int:
         return len(self._txns.get(job_id, []))
 
-    def list_jobs(self, *, limit: int = 50, offset: int = 0) -> tuple[list[Job], int]:
+    def list_jobs(
+        self, *, limit: int = 50, offset: int = 0, status: str | None = None
+    ) -> tuple[list[Job], int]:
         all_jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
+        if status is not None:
+            all_jobs = [j for j in all_jobs if j.status == status]
         return all_jobs[offset : offset + limit], len(all_jobs)
 
     @staticmethod
@@ -360,12 +366,19 @@ class SqlJobStore(JobStore):
             stmt = select(Transaction).where(Transaction.job_id == job_id)
             return len(list(s.execute(stmt).scalars().all()))
 
-    def list_jobs(self, *, limit: int = 50, offset: int = 0) -> tuple[list[Job], int]:
+    def list_jobs(
+        self, *, limit: int = 50, offset: int = 0, status: str | None = None
+    ) -> tuple[list[Job], int]:
         from sqlalchemy import func
 
         with self._with_session() as s:
-            total = int(s.execute(select(func.count(Job.id))).scalar_one())
-            stmt = select(Job).order_by(desc(Job.created_at)).limit(limit).offset(offset)
+            base = select(Job)
+            total_q = select(func.count(Job.id))
+            if status is not None:
+                base = base.where(Job.status == status)
+                total_q = total_q.where(Job.status == status)
+            total = int(s.execute(total_q).scalar_one())
+            stmt = base.order_by(desc(Job.created_at)).limit(limit).offset(offset)
             jobs = list(s.execute(stmt).scalars().all())
             return jobs, total
 

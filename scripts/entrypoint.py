@@ -66,6 +66,13 @@ def _ensure_schema() -> None:
         logger.info("Schema already present")
 
 
+def _ensure_upload_dir() -> None:
+    """Create the upload directory if it doesn't exist yet."""
+    upload_dir = os.getenv("UPLOAD_DIR", "/tmp/uploads")
+    Path(upload_dir).mkdir(parents=True, exist_ok=True)
+    logger.info("Upload directory ready: %s", upload_dir)
+
+
 def main() -> int:
     logger.info("Entrypoint starting (APP_ENV=%s)", os.getenv("APP_ENV", "development"))
 
@@ -79,12 +86,18 @@ def main() -> int:
     _wait_for_tcp(db_host, db_port, label="postgres")
     _wait_for_tcp(redis_host, redis_port, label="redis")
 
+    _ensure_upload_dir()
+
     try:
         _ensure_schema()
     except Exception as e:
         logger.error("DB init failed: %s", e)
 
-    cmd = os.getenv("CMD", "uvicorn app.main:app --host 0.0.0.0 --port 8000")
+    # Use docker-compose command override if provided, else CMD env var, else default.
+    if len(sys.argv) > 1:
+        cmd = " ".join(sys.argv[1:])
+    else:
+        cmd = os.getenv("CMD", "uvicorn app.main:app --host 0.0.0.0 --port 8000")
     logger.info("Starting: %s", cmd)
     os.execvp("sh", ["sh", "-c", cmd])
     return 0  # unreachable

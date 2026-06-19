@@ -1,6 +1,6 @@
 """LLM client (PDF §5(c) to (e)).
 
-The only file that imports :mod:`google.generativeai`. The public API:
+Uses :mod:`google.genai` (the SDK). The public API:
 
 - :func:`classify_categories` — batched classification of uncategorised rows.
 - :func:`generate_summary` — single-call narrative + risk_level + top merchants.
@@ -65,14 +65,12 @@ def retry_llm(fn: F) -> F:
         return fn
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        # Lazy import so tests can monkeypatch the exceptions module.
-        from google.api_core.exceptions import GoogleAPIError
-        from google.generativeai.types import BlockedPromptException
+        from google.genai.errors import ClientError, ServerError
 
         retryer = Retrying(
             stop=stop_after_attempt(3),
             wait=wait_exponential(multiplier=1, min=1, max=8),
-            retry=retry_if_exception_type((GoogleAPIError, BlockedPromptException)),
+            retry=retry_if_exception_type((ClientError, ServerError)),
             reraise=False,
         )
         try:
@@ -92,18 +90,23 @@ def retry_llm(fn: F) -> F:
 # ----- Gemini call (the only place the real client is touched) -------------- #
 
 
-def _call_gemini(prompt: str, *, json_mode: bool = True) -> str:
-    """Make a single Gemini call. Lazy-imports ``google.generativeai``."""
+def _call_gemini(prompt: str, *, json_mode: bool = True, temperature: float | None = None) -> str:
+    """Make a single Gemini call. Lazy-imports ``google.genai``."""
     settings = get_settings()
     if not settings.google_api_key:
         raise RuntimeError("GOOGLE_API_KEY is not set")
 
-    import google.generativeai as genai
+    from google import genai as genai_client
 
-    genai.configure(api_key=settings.google_api_key)
-    model = genai.GenerativeModel(settings.llm_model)
-    generation_config = {"response_mime_type": "application/json"} if json_mode else None
-    response = model.generate_content(prompt, generation_config=generation_config)
+    client = genai_client.Client(api_key=settings.google_api_key)
+    config = {"response_mime_type": "application/json"} if json_mode else {}
+    if temperature is not None:
+        config["temperature"] = temperature
+    response = client.models.generate_content(
+        model=settings.llm_model,
+        contents=prompt,
+        config=config,
+    )
     return response.text or ""
 
 
@@ -229,7 +232,7 @@ def _summarize_call(payload: dict[str, Any]) -> dict[str, Any]:
         "- 'risk_level' (one of low, medium, high)\n\n"
         f"Input:\n{json.dumps(payload, ensure_ascii=False)}"
     )
-    raw = _call_gemini(prompt, json_mode=True)
+    raw = _call_gemini(prompt, json_mode=True, temperature=0.7)
     parsed = _extract_json(raw)
     if not isinstance(parsed, dict):
         return {"raw": raw}

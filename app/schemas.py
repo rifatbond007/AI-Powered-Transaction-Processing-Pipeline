@@ -9,6 +9,14 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---- /jobs/* responses --------------------------------------------------- #
 
 
+class JobStatusSummary(BaseModel):
+    """High-level stats included in status when job is completed."""
+
+    total_spend_inr: float
+    anomaly_count: int
+    risk_level: str
+
+
 class JobStatus(BaseModel):
     """Returned by GET /jobs/{id}/status."""
 
@@ -20,6 +28,7 @@ class JobStatus(BaseModel):
     created_at: str
     completed_at: str | None
     error_message: str | None
+    summary: JobStatusSummary | None = None
 
 
 class JobUploadResponse(BaseModel):

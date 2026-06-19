@@ -31,8 +31,8 @@ RUN apt-get update \
 # Create a non-root user (uid 1000) and use it for the app.
 RUN groupadd --system --gid 1000 appuser \
     && useradd  --system --uid 1000 --gid appuser --home-dir /app --shell /bin/bash appuser \
-    && mkdir -p /app /app/data \
-    && chown -R appuser:appuser /app
+    && mkdir -p /app /app/data /tmp/uploads \
+    && chown -R appuser:appuser /app /tmp/uploads
 
 # Copy the prebuilt venv from the builder stage.
 COPY --from=builder /opt/venv /opt/venv

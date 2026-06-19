@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app import queue as queue_module
 from app.config import Settings, get_settings
@@ -14,6 +14,7 @@ from app.schemas import (
     JobListResponse,
     JobResults,
     JobStatus,
+    JobStatusSummary,
     JobSummaryRead,
     JobUploadResponse,
     LimitQuery,
@@ -117,20 +118,30 @@ async def upload_job(
 def list_jobs(
     limit: LimitQuery = 50,
     offset: OffsetQuery = 0,
+    status: str | None = Query(None, description="Filter by job status"),
     store: JobStore = Depends(get_job_store),
 ) -> JobListResponse:
-    """List all jobs, newest first."""
-    jobs, total = store.list_jobs(limit=limit, offset=offset)
+    """List all jobs, newest first. Supports ?status= filter."""
+    jobs, total = store.list_jobs(limit=limit, offset=offset, status=status)
     return JobListResponse(items=[JobStatus(**_serialize_job(j)) for j in jobs], total=total)
 
 
 @router.get("/{job_id}/status", response_model=JobStatus)
 def get_job_status(job_id: str, store: JobStore = Depends(get_job_store)) -> JobStatus:
-    """Return the current status of a job."""
+    """Return the current status of a job. Includes summary if completed."""
     job = store.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="job not found")
-    return JobStatus(**_serialize_job(job))
+    data = _serialize_job(job)
+    if job.status == "completed":
+        summary = store.get_summary(job_id)
+        if summary is not None:
+            data["summary"] = JobStatusSummary(
+                total_spend_inr=summary.total_spend_inr,
+                anomaly_count=summary.anomaly_count,
+                risk_level=summary.risk_level,
+            )
+    return JobStatus(**data)
 
 
 @router.get("/{job_id}/results", response_model=JobResults)
