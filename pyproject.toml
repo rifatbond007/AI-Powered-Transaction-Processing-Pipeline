@@ -8,6 +8,7 @@ ignore = ["E501"]  # line length handled by formatter
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["N802", "N803"]  # pytest-style naming allowed in tests
+"app/etl.py" = ["SIM103"]  # prefer explicit early-returns for readability
 
 [tool.ruff.format]
 quote-style = "double"
