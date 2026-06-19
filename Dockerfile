@@ -46,7 +46,6 @@ WORKDIR /app
 # Copy only what we need at runtime (tests/, .github/, *.md excluded via .dockerignore).
 COPY --chown=appuser:appuser app ./app
 COPY --chown=appuser:appuser scripts ./scripts
-COPY --chown=appuser:appuser transactions.csv ./transactions.csv
 COPY --chown=appuser:appuser pyproject.toml ./pyproject.toml
 
 USER appuser
