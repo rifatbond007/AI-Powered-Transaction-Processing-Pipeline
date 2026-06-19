@@ -1,0 +1,51 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Environment ----
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ---- IDE ----
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# ---- Logs ----
+*.log
+logs/
+
+# ---- Docker ----
+.docker-data/
+
+# ---- Local data ----
+data/
+*.sqlite
+*.db
+
+# ---- Assignment input files (not part of the project) ----
+Backend_DevOps_Assignment.pdf
+transactions.csv
+
+# ---- Tooling caches ----
+.puku-cli/
