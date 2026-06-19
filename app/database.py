@@ -1,13 +1,10 @@
 """SQLAlchemy 2.x database setup.
 
 Single source of truth for the engine and session factory. Tests and
-production both go through :func:`get_engine` / :func:`get_session`.
+production both go through :func:`get_engine` / :func:`get_session_factory`.
 """
 
 from __future__ import annotations
-
-from collections.abc import Iterator
-from typing import Any
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
@@ -42,16 +39,6 @@ def get_session_factory() -> sessionmaker[Session]:
     return _SessionLocal
 
 
-def get_db() -> Iterator[Session]:
-    """FastAPI dependency that yields a DB session and ensures cleanup."""
-    factory = get_session_factory()
-    db = factory()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def reset_for_tests() -> None:
     """Drop the engine / factory singletons. Used by tests."""
     global _engine, _SessionLocal
@@ -67,20 +54,3 @@ def create_all_tables() -> None:
 
     engine = get_engine()
     models.Base.metadata.create_all(bind=engine)
-
-
-def serialize_row(row: Any) -> dict[str, Any]:
-    """Convert an ORM ``Transaction`` to the dict shape the API expects."""
-    return {
-        "txn_id": row.txn_id,
-        "date": row.date.isoformat(),
-        "merchant": row.merchant,
-        "amount_original": row.amount_original,
-        "currency_original": row.currency_original,
-        "amount_inr": row.amount_inr,
-        "status": row.status or "",
-        "category": row.category or "",
-        "account_id": row.account_id,
-        "notes": row.notes or "",
-        "is_suspicious": row.is_suspicious,
-    }

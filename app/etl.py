@@ -1,10 +1,8 @@
-"""ETL pipeline for the transactions dataset.
+"""ETL pipeline for the transactions dataset (PDF §5(a)).
 
-Reads a dirty CSV, normalizes dates / currencies / status, converts all amounts
-to INR, drops duplicates, flags suspicious rows, and returns a structured
-result with a quarantine list for rejected rows.
-
-See `instruction.md` section 4 for the full ruleset.
+Reads a raw CSV and normalises it for downstream anomaly + LLM stages.
+Bad rows are quarantined; missing categories are filled with the literal
+``"Uncategorised"`` per the spec (not the empty string).
 """
 
 from __future__ import annotations
@@ -22,26 +20,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 
-# ----- Constants -------------------------------------------------------------
-
-#: Exchange rates to INR (static per spec; see instruction.md section 4.3).
-EXCHANGE_RATES_TO_INR: dict[str, float] = {
-    "INR": 1.0,
-    "USD": 83.2,
-    "EUR": 90.5,
-    "GBP": 107.8,
-}
-
-VALID_CURRENCIES: set[str] = set(EXCHANGE_RATES_TO_INR.keys())
-
-#: Canonical status values (post-normalization).
-VALID_STATUSES: set[str] = {"SUCCESS", "FAILED", "PENDING"}
-
-#: Transactions above this INR amount are flagged suspicious.
-SUSPICIOUS_AMOUNT_THRESHOLD_INR: float = 100_000.0
-
-#: Regex matching currency symbols / commas / whitespace in amount strings.
-_AMOUNT_CLEAN_RE = re.compile(r"[\s,$€£¥]+")
+UNCATEGORISED = "Uncategorised"
 
 #: Recognized date formats, tried in order. First match wins.
 _DATE_FORMATS: tuple[str, ...] = (
@@ -52,8 +31,8 @@ _DATE_FORMATS: tuple[str, ...] = (
     "%Y-%m-%d %H:%M:%S",
 )
 
-
-# ----- Result types ----------------------------------------------------------
+#: Regex matching currency symbols / commas / whitespace in amount strings.
+_AMOUNT_CLEAN_RE = re.compile(r"[\s,$€£¥]+")
 
 
 @dataclass
@@ -66,22 +45,19 @@ class QuarantineRow:
 
 
 @dataclass
-class ETLResult:
+class CleanResult:
     """The outcome of running :func:`run_etl`."""
 
-    clean_df: pd.DataFrame
+    rows: list[dict[str, Any]] = field(default_factory=list)
     quarantine: list[QuarantineRow] = field(default_factory=list)
-    summary: dict[str, Any] = field(default_factory=dict)
+    row_count_raw: int = 0
 
 
 # ----- Internal helpers ------------------------------------------------------
 
 
 def _parse_date(value: Any) -> date | None:
-    """Parse a date string in any of the supported formats.
-
-    Returns ``None`` if no format matches.
-    """
+    """Parse a date string in any of the supported formats."""
     if pd.isna(value):
         return None
     text = str(value).strip()
@@ -112,80 +88,40 @@ def _parse_amount(value: Any) -> float | None:
         return None
     if amount <= 0:
         return None
-    # Round to 2 decimal places for currency-style precision.
     return round(amount, 2)
-
-
-def _normalize_currency(value: Any) -> str | None:
-    """Uppercase a currency code and validate it against the known set."""
-    if pd.isna(value):
-        return None
-    code = str(value).strip().upper()
-    return code if code in VALID_CURRENCIES else None
-
-
-def _normalize_status(value: Any) -> str | None:
-    """Uppercase a status and validate it against the known set."""
-    if pd.isna(value):
-        return None
-    code = str(value).strip().upper()
-    return code if code in VALID_STATUSES else None
-
-
-def _is_suspicious(amount_inr: float, notes: str) -> bool:
-    """A row is suspicious if amount > threshold or notes contain SUSPICIOUS."""
-    if amount_inr > SUSPICIOUS_AMOUNT_THRESHOLD_INR:
-        return True
-    if notes and "SUSPICIOUS" in notes.upper():
-        return True
-    return False
-
-
-def _build_summary(df: pd.DataFrame) -> dict[str, Any]:
-    """Build the aggregate summary dictionary exposed via /summary."""
-    if df.empty:
-        return {
-            "total_transactions": 0,
-            "total_amount_inr": 0.0,
-            "by_status": {},
-            "by_category": {},
-            "by_currency_original": {},
-        }
-
-    by_status = df.groupby("status").size().to_dict()
-    by_category = df.groupby("category").size().to_dict()
-    # Original currency counts (pre-conversion), still useful for audits.
-    by_currency = df.groupby("currency_original").size().to_dict()
-    return {
-        "total_transactions": int(len(df)),
-        "total_amount_inr": round(float(df["amount_inr"].sum()), 2),
-        "by_status": {k: int(v) for k, v in by_status.items()},
-        "by_category": {k: int(v) for k, v in by_category.items()},
-        "by_currency_original": {k: int(v) for k, v in by_currency.items()},
-    }
 
 
 # ----- Public API ------------------------------------------------------------
 
 
-def run_etl(source: str | Path) -> ETLResult:
-    """Run the full ETL pipeline on a CSV file and return an :class:`ETLResult`.
+def run_etl(source: str | Path) -> CleanResult:
+    """Run cleaning on a CSV file and return a :class:`CleanResult`.
 
-    The pipeline is intentionally non-destructive: rejected rows are captured
-    in ``result.quarantine`` rather than silently dropped, so operators can
-    audit every decision.
+    The output dict shape is the contract for the anomaly + LLM stages.
+    Each row has at least::
+
+        {
+            "txn_id": str,
+            "date": "YYYY-MM-DD",
+            "merchant": str,
+            "amount": float,
+            "currency": str,           # uppercase
+            "status": str,             # uppercase, "" if missing
+            "category": str,           # "Uncategorised" if missing
+            "account_id": str,
+        }
     """
     logger.info("Loading CSV from %s", source)
     raw_df = pd.read_csv(source, dtype=str, keep_default_na=False)
     logger.info("Loaded %d raw rows", len(raw_df))
 
-    clean_records: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     quarantine: list[QuarantineRow] = []
-    seen_keys: set[tuple[str, date, float, str]] = set()
+    seen: set[tuple[str, date, float, str]] = set()
 
     for idx, row in raw_df.iterrows():
         raw = row.to_dict()
-        row_index = int(idx) + 2  # +2 = header row + 1-based for humans
+        row_index = int(idx) + 2  # +2 = header + 1-based for humans
 
         # --- Required: account_id ---
         account_id = str(row.get("account_id", "")).strip()
@@ -193,7 +129,7 @@ def run_etl(source: str | Path) -> ETLResult:
             quarantine.append(QuarantineRow(row_index, raw, "missing account_id"))
             continue
 
-        # --- Date (auto-detect format) ---
+        # --- Date ---
         parsed_date = _parse_date(row.get("date"))
         if parsed_date is None:
             quarantine.append(
@@ -201,7 +137,7 @@ def run_etl(source: str | Path) -> ETLResult:
             )
             continue
 
-        # --- Amount (strip $, commas) ---
+        # --- Amount ---
         amount = _parse_amount(row.get("amount"))
         if amount is None:
             quarantine.append(
@@ -209,17 +145,19 @@ def run_etl(source: str | Path) -> ETLResult:
             )
             continue
 
-        # --- Currency ---
-        currency = _normalize_currency(row.get("currency"))
-        if currency is None:
+        # --- Currency (uppercase) ---
+        currency = str(row.get("currency", "")).strip().upper()
+        if not currency:
             quarantine.append(
                 QuarantineRow(row_index, raw, f"invalid currency: {row.get('currency')!r}")
             )
             continue
 
-        # --- Status (optional) ---
-        status = _normalize_status(row.get("status"))
-        # status missing is allowed; treat as empty string in output.
+        # --- Status (uppercase; empty allowed) ---
+        status = str(row.get("status", "")).strip().upper()
+
+        # --- Category: missing -> "Uncategorised" (PDF §5(a)) ---
+        category = str(row.get("category", "")).strip() or UNCATEGORISED
 
         # --- txn_id: regenerate if missing ---
         txn_id = str(row.get("txn_id", "")).strip()
@@ -227,57 +165,28 @@ def run_etl(source: str | Path) -> ETLResult:
             txn_id = f"TXN_GEN_{idx}"
             logger.info("Row %d: regenerated missing txn_id as %s", row_index, txn_id)
 
-        # --- Duplicates ---
+        # --- Duplicates (per-job scope, but we also dedupe within the input) ---
         dedup_key = (txn_id, parsed_date, amount, account_id)
-        if dedup_key in seen_keys:
+        if dedup_key in seen:
             quarantine.append(QuarantineRow(row_index, raw, "duplicate"))
             continue
-        seen_keys.add(dedup_key)
+        seen.add(dedup_key)
 
-        # --- Convert to INR ---
-        amount_inr = round(amount * EXCHANGE_RATES_TO_INR[currency], 2)
-
-        # --- Optional fields ---
+        # --- Merchant ---
         merchant = str(row.get("merchant", "")).strip()
-        category = str(row.get("category", "")).strip()
-        notes = str(row.get("notes", "")).strip()
 
-        clean_records.append(
+        rows.append(
             {
                 "txn_id": txn_id,
                 "date": parsed_date.isoformat(),
                 "merchant": merchant,
-                "amount_original": amount,
-                "currency_original": currency,
-                "amount_inr": amount_inr,
-                "status": status or "",
+                "amount": amount,
+                "currency": currency,
+                "status": status,
                 "category": category,
                 "account_id": account_id,
-                "notes": notes,
-                "is_suspicious": _is_suspicious(amount_inr, notes),
             }
         )
 
-    clean_df = pd.DataFrame(clean_records)
-    summary = _build_summary(clean_df)
-
-    logger.info(
-        "ETL complete: %d clean rows, %d quarantined",
-        len(clean_df),
-        len(quarantine),
-    )
-    return ETLResult(clean_df=clean_df, quarantine=quarantine, summary=summary)
-
-
-def write_summary_json(result: ETLResult, destination: str | Path) -> None:
-    """Write the ETL summary to a JSON file (helper used by scripts/init_db)."""
-    import json
-
-    destination = Path(destination)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "summary": result.summary,
-        "quarantine_count": len(result.quarantine),
-    }
-    destination.write_text(json.dumps(payload, indent=2, sort_keys=True))
-    logger.info("Wrote summary to %s", destination)
+    logger.info("ETL complete: %d clean rows, %d quarantined", len(rows), len(quarantine))
+    return CleanResult(rows=rows, quarantine=quarantine, row_count_raw=len(raw_df))

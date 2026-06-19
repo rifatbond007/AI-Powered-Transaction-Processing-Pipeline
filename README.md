@@ -1,42 +1,47 @@
 # AI-Powered Transaction Processing Pipeline
 
-A production-grade backend service that ingests a messy `transactions.csv`,
-cleans it, and serves it through a REST API with Postgres persistence and
-Redis caching.
-
-## Overview
+A production-grade async backend that ingests a messy `transactions.csv`,
+cleans + classifies + summarizes it through a job queue + LLM, and exposes
+the structured output via a small REST API.
 
 This service was built end-to-end as a Backend / DevOps interview assignment.
 It demonstrates:
 
 - A **defensive ETL pipeline** that handles dirty data (mixed date formats,
   currency symbols, casing, nulls, duplicates).
-- A **pluggable storage layer** — same interface for in-memory and Postgres
+- **Asynchronous, job-based processing** — `POST /jobs/upload` returns `202`
+  immediately and the actual work happens in an RQ worker.
+- **Anomaly detection** (3× per-account-median OR USD paid to a domestic-only
+  brand).
+- **Batched, retried LLM classification** of uncategorised rows via
+  Gemini 1.5 Flash (free tier), plus an LLM-generated narrative summary.
+- A **pluggable storage layer** — `JobStore` ABC with in-memory and Postgres
   implementations.
-- A **FastAPI** REST API with filtering, pagination, and aggregate endpoints.
-- **Redis caching** for expensive aggregates (60s TTL, graceful degradation).
-- **Docker Compose** orchestration with health-gated startup.
-- **CI** on every push (lint, test with real Postgres + Redis, Docker build).
+- **Docker Compose** orchestration: api + worker + Postgres + Redis.
+- **CI** on every push (lint, test, Docker build).
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  CSV[transactions.csv] -->|load| ETL[ETL Pipeline<br/>app/etl.py]
-  ETL -->|clean rows| Store[TransactionStore<br/>interface]
-  Store --> IM[InMemoryTransactionStore<br/>app/store.py]
-  Store --> SQL[SqlTransactionStore<br/>app/store_sql.py]
+  CSV[transactions.csv] -->|POST /jobs/upload| API[FastAPI<br/>app/main.py]
+  API -->|enqueue| RQ[(Redis 7<br/>RQ queue)]
+  RQ --> Worker[RQ Worker<br/>app/worker.py]
+  Worker --> ETL[ETL<br/>app/etl.py]
+  ETL --> Anomaly[Anomaly<br/>app/anomaly.py]
+  Anomaly --> LLM[Gemini 1.5 Flash<br/>app/llm.py]
+  LLM --> Store[JobStore<br/>interface]
+  Store --> IM[InMemoryJobStore]
+  Store --> SQL[SqlJobStore]
   SQL -->|SQLAlchemy 2.x| PG[(PostgreSQL 16)]
-  Client[HTTP Client] -->|HTTP| API[FastAPI<br/>app/main.py]
+  Client[HTTP Client] -->|poll| API
   API --> Store
-  API -->|cache| Cache[Redis 7]
-  Cache -->|TTL 60s| API
 ```
 
-The `TransactionStore` abstract base class lets us swap storage backends
-without touching the route layer. The in-memory implementation is used in
-tests and as a fallback if the DB is unavailable; the SQL implementation
-is the production default.
+The `JobStore` ABC lets us swap backends without touching routes or the
+worker. In-memory is used in tests and `make dev`; Postgres is the production
+default. **The store is the source of truth for job status** — RQ is only used
+to signal "ready to process".
 
 ## Quick Start
 
@@ -46,6 +51,7 @@ is the production default.
 git clone https://github.com/rifatbond007/AI-Powered-Transaction-Processing-Pipeline.git
 cd AI-Powered-Transaction-Processing-Pipeline
 cp .env.example .env
+# (Optional) edit .env to set GOOGLE_API_KEY for real LLM calls
 make up             # or: docker compose up -d
 ```
 
@@ -58,24 +64,9 @@ curl http://localhost:8000/health
 
 Interactive API docs: <http://localhost:8000/docs>
 
-### Option 1b: Local Python with Docker-backed services
-
-If you want fast code iteration but still want real Postgres/Redis:
-
-```bash
-# Terminal 1 — start only Postgres + Redis (no API container)
-docker compose up -d postgres redis
-
-# Terminal 2 — run the API locally against those services
-source .venv/bin/activate
-export DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5433/transactions
-export REDIS_URL=redis://localhost:6380/0
-make dev
-```
-
 ### Option 2: Local Python (in-memory store, no services)
 
-For quick dev iteration without any external services:
+For quick dev iteration without Docker:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
@@ -83,107 +74,128 @@ make install
 make dev            # uvicorn app.main:app --reload  (in-memory store)
 ```
 
-The in-memory store auto-loads `transactions.csv` from the project root.
+Without `GOOGLE_API_KEY`, the LLM calls return `llm_failed=True` and the rest
+of the pipeline completes — this is the right failure mode for evaluating the
+non-LLM logic.
 
 ## Endpoints
 
-| Method | Path                      | Description                                       |
-| ------ | ------------------------- | ------------------------------------------------- |
-| GET    | `/health`                 | Liveness probe                                    |
-| GET    | `/transactions`           | List transactions (filters + pagination)          |
-| GET    | `/transactions/{txn_id}`  | Get a single transaction                          |
-| GET    | `/summary`                | Aggregate summary (Redis-cached, 60s TTL)         |
-| GET    | `/suspicious`             | Transactions flagged as suspicious                |
-
-### Query parameters for `/transactions`
-
-| Param        | Type    | Notes                                                     |
-| ------------ | ------- | --------------------------------------------------------- |
-| `start_date` | date    | Inclusive (YYYY-MM-DD)                                    |
-| `end_date`   | date    | Inclusive (YYYY-MM-DD)                                    |
-| `status`     | string  | `SUCCESS` \| `FAILED` \| `PENDING`                        |
-| `category`   | string  | e.g. `Shopping`, `Food`, `Travel`                         |
-| `account_id` | string  | e.g. `ACC001`                                             |
-| `currency`   | string  | Original currency: `INR` \| `USD` \| `EUR` \| `GBP`       |
-| `limit`      | int     | 1–500 (default 50)                                        |
-| `offset`     | int     | >= 0 (default 0)                                          |
+| Method | Path                       | Description                                |
+| ------ | -------------------------- | ------------------------------------------ |
+| GET    | `/health`                  | Liveness probe                             |
+| POST   | `/jobs/upload`             | Upload CSV; returns 202 with `job_id`      |
+| GET    | `/jobs`                    | List jobs (newest first)                   |
+| GET    | `/jobs/{job_id}/status`    | Job status + counts + error (if any)       |
+| GET    | `/jobs/{job_id}/results`   | Transactions + summary (404/409/200)       |
 
 ### Examples
 
 ```bash
-# All transactions, newest first, first page
-curl http://localhost:8000/transactions
+# Upload a CSV
+JOB=$(curl -sS -F file=@transactions.csv http://localhost:8000/jobs/upload | jq -r .job_id)
+echo "job: $JOB"
 
-# Filter by account and status
-curl "http://localhost:8000/transactions?account_id=ACC001&status=SUCCESS"
+# Poll status until done
+while true; do
+  STATUS=$(curl -sS http://localhost:8000/jobs/$JOB/status | jq -r .status)
+  echo "  status: $STATUS"
+  [ "$STATUS" = "completed" -o "$STATUS" = "failed" ] && break
+  sleep 2
+done
 
-# Date range
-curl "http://localhost:8000/transactions?start_date=2024-06-01&end_date=2024-06-30"
+# Fetch full results
+curl -sS http://localhost:8000/jobs/$JOB/results | jq '{summary, llm_failures: (.transactions | map(select(.llm_failed)) | length)}'
 
-# Pagination
-curl "http://localhost:8000/transactions?limit=10&offset=20"
-
-# Single transaction
-curl http://localhost:8000/transactions/TXN1001
-
-# Aggregate summary
-curl http://localhost:8000/summary
-
-# Suspicious transactions
-curl http://localhost:8000/suspicious
+# List all jobs
+curl http://localhost:8000/jobs | jq '{total, items: [.items[].job_id]}'
 ```
 
-## ETL Rules
+### Status codes
+
+- `POST /jobs/upload` → **202** on success; **415** bad content type; **413**
+  > 10 MiB; **400** empty file.
+- `GET /jobs/{id}/status` → **200** or **404**.
+- `GET /jobs/{id}/results` → **200**; **404** unknown; **409** if job not yet
+  `completed`; **500** if completed but summary missing.
+
+## ETL Rules (PDF §5(a))
 
 The pipeline (`app/etl.py`) is defensive by design — bad rows go to a
-`quarantine` list with a reason, never silently dropped. See
-[`instruction.md`](./instruction.md) section 4 for the full ruleset.
+`quarantine` list with a reason, never silently dropped.
 
 | Rule                          | Behavior                                                |
 | ----------------------------- | ------------------------------------------------------- |
 | Date parsing                  | Auto-detects `dd-mm-yyyy`, `yyyy/mm/dd`, `yyyy-mm-dd`   |
 | Amounts                       | Strips `$`, `€`, `£`, commas, whitespace                |
 | Currency normalization        | Lower/uppercase → uppercase; invalid → quarantine       |
-| INR conversion                | USD 83.2 / EUR 90.5 / GBP 107.8 (static per spec)       |
 | Status normalization          | `success` / `Success` / `SUCCESS` → `SUCCESS`           |
+| Missing `category`            | Filled with `"Uncategorised"` (PDF requirement)         |
 | Missing `txn_id`              | Regenerated as `TXN_GEN_<row_index>`                    |
+| Missing `account_id`          | Quarantined                                             |
+| Unparseable date / amount     | Quarantined                                             |
 | Duplicates                    | Detected on `(txn_id, date, amount, account_id)`        |
-| Suspicious flag               | `amount_inr > 100,000` OR note contains `SUSPICIOUS`    |
+
+## Anomaly Detection (PDF §5(b))
+
+`app/anomaly.py` flags rows where **either** rule fires:
+
+1. **Amount > 3× per-account median.** Computed per `account_id` from the
+   cleaned rows. Single-row accounts skip this rule (median equals value).
+2. **USD paid to a domestic-only brand.** Domestic brands: `Swiggy`,
+   `Ola`, `IRCTC`. INR paid to these brands is fine.
+
+Both can fire on the same row — the `anomaly_reason` field joins them with
+`+` (e.g. `amount_3x_median+usd_domestic`).
+
+## LLM (PDF §5(c)–(e))
+
+- **Provider**: Gemini 1.5 Flash via `google-generativeai` (free tier, no
+  spend). Configure with `GOOGLE_API_KEY`.
+- **Batch size**: 20 rows per `classify_categories` call
+  (`LLM_BATCH_SIZE=20`).
+- **Retry**: 3 attempts with exponential backoff (1s, 2s, 4s) via `tenacity`.
+- **Failure isolation**: a batch that fails is marked `llm_failed=True` on
+  each row; the **job still completes** (PDF §5(e)). Only ETL/DB/IO errors
+  mark the job `failed`.
+- **Narrative**: a single `generate_summary` call after transactions are
+  persisted; returns `total_spend_by_currency`, `top_3_merchants`,
+  `narrative`, `risk_level`.
+
+If `GOOGLE_API_KEY` is unset, both calls return `{"llm_failed": True}` after
+exhausting retries — the worker handles this and the job still completes.
 
 ## Development
-
-Common commands (or use `make <target>`):
 
 ```bash
 make help        # show all available targets
 make install     # install all deps (requires active venv)
 make lint        # ruff check
 make format      # auto-format
-make test        # run pytest
+make test        # run pytest (32 tests, no services needed)
 make test-cov    # run pytest with coverage
-make up          # start full stack via Docker (api + postgres + redis)
+make up          # start full stack via Docker (api + worker + postgres + redis)
 make down        # stop stack and wipe DB volume
 make logs        # tail logs from all services
-make dev         # run API locally with in-memory store (no Docker needed)
+make dev         # run API locally with in-memory store
+make worker      # run rq worker locally
 make clean       # remove build artifacts
 ```
-
-Run `make help` any time to see the full list.
 
 ## Testing
 
 ```bash
-make test         # 71 tests
-make test-cov     # 71 tests with coverage report
+make test         # 32 tests
+make test-cov     # 32 tests with coverage report
 ```
 
 Tests use:
-- **Pandas** + custom fixtures (no network) for ETL unit tests.
-- **In-memory store** for API unit tests.
-- **SQLite in-memory** + **fakeredis** for SQL/cache tests (no external services needed locally).
-- **Real Postgres + Redis** service containers in CI (`.github/workflows/ci.yml`).
-
-Coverage is enforced at **70%** minimum in CI.
+- **Pandas** + custom fixtures (`sample_csv_path`, `real_csv_path`) for ETL
+  unit tests.
+- **In-memory `JobStore`** for API + worker tests.
+- **SQLite in-memory** for SQL store tests.
+- **fakeredis** for RQ queue tests (no real Redis needed locally).
+- **Real Postgres + Redis** service containers in CI
+  (`.github/workflows/ci.yml`).
 
 ## Project Structure
 
@@ -193,30 +205,33 @@ Coverage is enforced at **70%** minimum in CI.
 │   ├── main.py             # FastAPI app + lifespan
 │   ├── config.py           # Pydantic settings (env-driven)
 │   ├── database.py         # SQLAlchemy engine + session
-│   ├── models.py           # ORM models
+│   ├── models.py           # ORM models (Job, Transaction, JobSummary)
 │   ├── schemas.py          # Pydantic request/response models
-│   ├── etl.py              # ETL pipeline
-│   ├── store.py            # In-memory store (interface + impl)
-│   ├── store_sql.py        # Postgres store (same interface)
-│   ├── cache.py            # Redis wrapper
+│   ├── etl.py              # ETL pipeline (cleaning only)
+│   ├── anomaly.py          # 3x-median + USD-domestic anomaly rules
+│   ├── llm.py              # Gemini classifier + summary (retried)
+│   ├── queue.py            # RQ get_queue + enqueue_process_job
+│   ├── upload.py           # CSV upload lifecycle (save + cleanup)
+│   ├── worker.py           # RQ task: process_job
+│   ├── fx.py               # Static rates + to_inr helper
+│   ├── storage.py          # JobStore ABC + InMemory + Sql impls
 │   ├── dependencies.py     # FastAPI DI helpers
-│   └── routes/             # API route modules
+│   └── routes/
 │       ├── health.py
-│       ├── transactions.py
-│       └── summary.py
+│       └── jobs.py         # /jobs/upload, /jobs, /jobs/{id}/{status,results}
 ├── scripts/
-│   ├── init_db.py          # One-shot DB loader (CSV -> ETL -> Postgres)
-│   └── entrypoint.py       # Container entrypoint (wait for DB, init, exec)
-├── tests/                  # pytest suite (71 tests)
+│   ├── init_db.py          # Schema-only (drop_all + create_all)
+│   └── entrypoint.py       # Container entrypoint (wait + exec)
+├── tests/                  # pytest suite (32 tests)
 ├── .github/workflows/
 │   └── ci.yml              # CI: lint + test + docker build
 ├── Dockerfile              # Multi-stage, non-root, healthcheck
-├── docker-compose.yml      # api + postgres + redis
+├── docker-compose.yml      # api + worker + postgres + redis
 ├── Makefile                # Common dev commands
 ├── pyproject.toml          # ruff + pytest config
 ├── requirements.txt        # Runtime deps
 ├── requirements-dev.txt    # Test deps
-├── instruction.md          # The rulebook followed throughout
+├── Backend_DevOps_Assignment.pdf  # The authoritative spec
 └── README.md
 ```
 
@@ -224,23 +239,23 @@ Coverage is enforced at **70%** minimum in CI.
 
 | Decision | Rationale |
 | -------- | --------- |
-| **SQLAlchemy 2.x (not 1.x)** | Modern typed API, future-proof, better mypy support. |
-| **Pluggable `TransactionStore` interface** | Routes don't care about storage. Tests use in-memory, prod uses Postgres. Easy to add (e.g.) BigQuery later. |
+| **RQ + Redis (not Celery)** | RQ is simpler, pure-Python, and matches the small surface area of this app. Celery is overkill for one queue type. |
+| **Gemini 1.5 Flash (not OpenAI)** | Free tier, no spend. Matches the assignment's "no spend required" constraint. |
+| **Job-based async (not synchronous)** | LLM calls + ETL can take seconds. Returning a `job_id` and letting the client poll is the right UX. |
+| **Pluggable `JobStore` interface** | Routes and worker don't care about storage. Tests use in-memory; prod uses Postgres. |
 | **Pydantic v2** | 5-50x faster than v1, better type inference, native discriminated unions. |
-| **Static exchange rates** | Spec says "use these rates". A real prod system would call a rates API with caching. |
+| **Static exchange rates** | The PDF specifies static rates. A real prod system would call a rates API with caching. |
 | **`Decimal` -> `float`** in API | JSON doesn't have a `Decimal` type; we round to 2dp at ETL time. Acceptable for amounts up to ~9 trillion INR. |
-| **Composite indexes** `(account_id, date)` and `(status, date)` | These are the two most common filter combinations in practice. |
-| **In-memory cache fallback to in-process** | A non-issue in containers (Redis is always there), but the API can also run standalone for demos without Redis. |
-| **Multi-stage Dockerfile** | Final image has no compiler, no pip cache, no `.pyc` files. ~370MB. |
 | **No Alembic migrations** | Out of scope for the assignment. `Base.metadata.create_all()` is fine for fresh DBs. Production would use Alembic with a baseline. |
-| **Graceful DB fallback** | If Postgres is unreachable, the app still starts with the in-memory store. Useful in dev / disaster scenarios. |
+| **Multi-stage Dockerfile** | Final image has no compiler, no pip cache, no `.pyc` files. ~370MB. |
 | **f-string SQL? Never.** | All queries use SQLAlchemy parameter binding — injection-safe. |
 
 ## Out of Scope (per assignment)
 
 - Authentication / authorization
 - Rate limiting
-- Horizontal scaling, k8s manifests
+- Horizontal scaling manifests (scale workers with
+  `docker compose up --scale worker=N`)
 - Real currency exchange API
 - Frontend / dashboard
 

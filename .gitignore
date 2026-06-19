@@ -49,3 +49,6 @@ transactions.csv
 
 # ---- Tooling caches ----
 .puku-cli/
+# But commit the project-level puku-cli hook config and skills (not the per-user settings.local.json).
+!.puku-cli/settings.json
+!.puku-cli/skills/
