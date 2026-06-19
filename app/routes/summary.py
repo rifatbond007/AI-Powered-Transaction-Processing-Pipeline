@@ -1,18 +1,22 @@
-"""Route for the /summary aggregate endpoint (Redis-cached in Segment 4)."""
+"""Route for the /summary aggregate endpoint (Redis-cached)."""
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends
 
+from app import cache
 from app.config import Settings, get_settings
 from app.dependencies import get_store
 from app.schemas import Summary
 from app.store import TransactionStore
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["summary"])
 
-# Simple in-process cache for now; Segment 4 swaps in Redis.
-_cache: dict[str, Summary] = {}
+CACHE_KEY = "summary:v1"
 
 
 @router.get("/summary", response_model=Summary)
@@ -22,20 +26,21 @@ def get_summary(
 ) -> Summary:
     """Return aggregate summary statistics.
 
-    Cached for ``SUMMARY_CACHE_TTL`` seconds. Cache failures are non-fatal
-    (logged at WARNING, served from DB) — see instruction.md section 7.
+    Cached in Redis for ``SUMMARY_CACHE_TTL`` seconds. Cache failures
+    degrade gracefully — we log and fall through to the DB.
     """
-    cache_key = "summary:v1"
-    cached = _cache.get(cache_key)
+    cached = cache.cache_get_json(CACHE_KEY)
     if cached is not None:
-        return cached
+        return Summary(**cached)
 
     raw = store.compute_summary()
     summary = Summary(**raw)
-    _cache[cache_key] = summary
+    cache.cache_set_json(CACHE_KEY, summary.model_dump(), settings.summary_cache_ttl_seconds)
     return summary
 
 
 def clear_summary_cache() -> None:
     """Helper used by tests to reset the in-process cache between runs."""
-    _cache.clear()
+    # No-op for Redis-backed cache — the real Redis instance is shared.
+    # Tests should use a fresh Redis (fakeredis) or unique key prefixes.
+    pass
