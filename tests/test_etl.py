@@ -7,6 +7,7 @@ section 4 has at least one dedicated test below.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -253,8 +254,17 @@ def test_quarantine_carries_raw_row(sample_csv_path: object) -> None:
     assert isinstance(q.reason, str)
 
 
-def test_real_csv_runs_without_error(real_csv_path: object) -> None:
-    """Smoke test: the real assignment CSV must not crash the pipeline."""
+def test_real_csv_runs_without_error(real_csv_path: Path) -> None:
+    """Smoke test: the real assignment CSV must not crash the pipeline.
+
+    The real ``transactions.csv`` is an input artifact (gitignored) so it
+    is not guaranteed to be present in CI. We skip cleanly when it's
+    missing rather than failing — the synthetic ``sample_csv`` fixture
+    already covers the same code paths.
+    """
+    if not real_csv_path.exists():
+        pytest.skip(f"{real_csv_path} not present (CI runs without the input artifact)")
+
     result = run_etl(real_csv_path)
     # Sanity bounds — we should clean a majority of the ~97 rows.
     assert len(result.clean_df) > 50
