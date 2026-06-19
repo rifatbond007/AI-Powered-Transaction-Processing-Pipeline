@@ -43,6 +43,3 @@ def enqueue_process_job(job_id: str, csv_path: str) -> Any:
     rq_job = queue.enqueue(process_job, job_id, csv_path)
     logger.info("Enqueued job %s as RQ %s", job_id, rq_job.id)
     return rq_job
-
-
-

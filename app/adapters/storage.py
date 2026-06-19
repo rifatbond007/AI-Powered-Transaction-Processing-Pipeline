@@ -254,6 +254,3 @@ class SqlJobStore(JobStore):
             "narrative": summary.narrative,
             "risk_level": summary.risk_level,
         }
-
-
-
