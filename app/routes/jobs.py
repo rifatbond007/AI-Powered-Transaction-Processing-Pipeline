@@ -7,9 +7,9 @@ import logging
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 
 from app.adapters import queue as queue_module
+from app.adapters.storage import JobStore
 from app.config import Settings, get_settings
 from app.dependencies import get_job_store
-from app.services.etl import run_etl
 from app.schemas import (
     JobListResponse,
     JobResults,
@@ -21,7 +21,7 @@ from app.schemas import (
     OffsetQuery,
     TransactionRead,
 )
-from app.adapters.storage import JobStore
+from app.services.etl import run_etl
 from app.services.upload import save_upload
 
 logger = logging.getLogger(__name__)

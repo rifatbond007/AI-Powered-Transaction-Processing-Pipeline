@@ -31,7 +31,6 @@ def _fake_summarize(_payload):
 def test_worker_processes_csv_end_to_end(sample_csv_path) -> None:
     """Worker reads CSV -> cleans -> flags anomalies -> classifies -> summarises -> persists."""
     from app.services import llm, worker
-    from app.dependencies import get_job_store
     from tests.conftest import make_sql_store
 
     store, *_ = make_sql_store()

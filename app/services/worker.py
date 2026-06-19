@@ -16,10 +16,10 @@ import logging
 from datetime import date as _date
 from typing import Any
 
+from app.adapters.storage import _aggregate_by_currency, _build_top_merchants
 from app.services.anomaly import flag_anomalies
 from app.services.etl import run_etl
 from app.services.fx import to_inr
-from app.adapters.storage import _aggregate_by_currency, _build_top_merchants
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +82,9 @@ def _ensure_store() -> None:
 
 def process_job(job_id: str, csv_path: str) -> dict[str, Any]:
     """RQ task. Returns a small dict for the RQ log; persistent state lives in the DB."""
-    from app.services import llm
     from app.config import get_settings
     from app.dependencies import get_job_store
+    from app.services import llm
     from app.services.upload import cleanup
 
     _ensure_store()

@@ -46,8 +46,8 @@ SAMPLE_CSV = (
 
 def test_upload_returns_202_and_runs_worker_inline() -> None:
     """Upload -> 202 -> we run the worker inline so status reaches completed."""
-    from app.services import llm
     from app.adapters import queue as queue_module
+    from app.services import llm
     from app.services.worker import process_job
 
     # Patch enqueue to run the worker synchronously inside the test.

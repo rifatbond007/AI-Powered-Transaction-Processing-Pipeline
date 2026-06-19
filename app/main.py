@@ -7,10 +7,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.adapters.storage import SqlJobStore
 from app.config import get_settings
 from app.dependencies import get_job_store, set_job_store
 from app.routes import health, jobs
-from app.adapters.storage import SqlJobStore
 
 logger = logging.getLogger(__name__)
 
