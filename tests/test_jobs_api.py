@@ -12,15 +12,15 @@ from fastapi.testclient import TestClient
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("USE_IN_MEMORY_STORE", "1")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
-    # Reset the in-memory store between tests
+    # Reset the store between tests with a fresh SQLite-backed SqlJobStore
     from app.dependencies import set_job_store
-    from app.adapters.storage import InMemoryJobStore
+    from tests.conftest import make_sql_store
 
-    set_job_store(InMemoryJobStore())
+    store, *_ = make_sql_store()
+    set_job_store(store)
 
 
 def _fake_classify(batch):

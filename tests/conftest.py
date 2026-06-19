@@ -6,12 +6,13 @@ import os
 from pathlib import Path
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 # Ensure tests use a fresh, isolated environment — no real Postgres/Redis.
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("USE_IN_MEMORY_STORE", "1")
 os.environ.setdefault("UPLOAD_DIR", "/tmp/tx-test-uploads")
 os.environ.setdefault("GOOGLE_API_KEY", "test-key-not-real")
 
@@ -52,9 +53,27 @@ def real_csv_path() -> Path:
     return Path(__file__).resolve().parent.parent / "transactions.csv"
 
 
-@pytest.fixture()
-def in_memory_store():
-    """A fresh in-memory JobStore for tests that need the store directly."""
-    from app.adapters.storage import InMemoryJobStore
+def make_sql_store(db_url: str = "sqlite:///:memory:") -> tuple:
+    """Create a SqlJobStore backed by SQLite (fresh tables each call).
 
-    return InMemoryJobStore()
+    Uses :class:`StaticPool` so all connections share the same in-memory DB.
+    Sets ``expire_on_commit=False`` so ORM instances remain usable after the
+    session that created them is closed.
+    """
+    from sqlalchemy.pool import StaticPool
+
+    from app.models import Base
+
+    engine = create_engine(db_url, poolclass=StaticPool, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    factory = sessionmaker(bind=engine, expire_on_commit=False)
+    from app.adapters.storage import SqlJobStore
+
+    return SqlJobStore(factory), factory, engine
+
+
+@pytest.fixture()
+def sql_store():
+    """A fresh SqlJobStore (SQLite) for tests that need the store directly."""
+    store, *_ = make_sql_store()
+    return store

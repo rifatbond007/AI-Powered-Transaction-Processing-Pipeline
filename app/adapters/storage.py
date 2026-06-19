@@ -1,9 +1,7 @@
 """Storage layer for jobs, transactions, and summaries (PDF §6).
 
-Two implementations are provided behind the :class:`JobStore` ABC:
-
-- :class:`InMemoryJobStore` — for tests and `USE_IN_MEMORY_STORE=1` dev mode.
-- :class:`SqlJobStore` — the production default (Postgres via SQLAlchemy).
+:class:`SqlJobStore` is the only implementation (Postgres via SQLAlchemy,
+or SQLite in tests).
 
 The store is the *single* source of truth for job status; the worker
 updates it, the API reads from it. The RQ Redis queue is only used to
@@ -88,134 +86,6 @@ class JobStore(ABC):
         self, *, limit: int = 50, offset: int = 0, status: str | None = None
     ) -> tuple[list[Job], int]:
         """Return (jobs, total) — newest first. Optionally filter by status."""
-
-
-# --------------------------------------------------------------------------- #
-# In-memory implementation
-# --------------------------------------------------------------------------- #
-
-
-class InMemoryJobStore(JobStore):
-    """Thread-unsafe in-memory store. Fine for tests and `make dev`."""
-
-    def __init__(self) -> None:
-        self._jobs: dict[str, Job] = {}
-        self._txns: dict[str, list[Transaction]] = defaultdict(list)
-        self._summaries: dict[str, JobSummary] = {}
-        self._next_txn_id = 1
-
-    def create_job(
-        self,
-        *,
-        filename: str,
-        row_count_raw: int,
-        status: str = "pending",
-    ) -> Job:
-        if status not in JOB_STATUSES:
-            raise ValueError(f"invalid status: {status}")
-        job = Job(
-            id=uuid.uuid4().hex,
-            filename=filename,
-            status=status,
-            row_count_raw=row_count_raw,
-            row_count_clean=None,
-            created_at=_utcnow(),
-            completed_at=None,
-            error_message=None,
-        )
-        self._jobs[job.id] = job
-        return job
-
-    def get_job(self, job_id: str) -> Job | None:
-        return self._jobs.get(job_id)
-
-    def set_row_count_raw(self, job_id: str, row_count_raw: int) -> None:
-        job = self._jobs.get(job_id)
-        if job is not None:
-            job.row_count_raw = row_count_raw
-
-    def set_job_status(
-        self,
-        job_id: str,
-        status: str,
-        *,
-        row_count_clean: int | None = None,
-        error_message: str | None = None,
-    ) -> None:
-        job = self._jobs.get(job_id)
-        if job is None:
-            return
-        job.status = status
-        if row_count_clean is not None:
-            job.row_count_clean = row_count_clean
-        if error_message is not None:
-            job.error_message = error_message
-        if status in ("completed", "failed"):
-            job.completed_at = _utcnow()
-
-    def attach_transactions(self, job_id: str, rows: list[dict[str, Any]]) -> None:
-        for r in rows:
-            data = self._coerce(r)
-            data.setdefault("id", self._next_txn_id)
-            self._next_txn_id += 1
-            data["job_id"] = job_id
-            self._txns[job_id].append(Transaction(**data))
-
-    def attach_summary(self, summary: dict[str, Any]) -> None:
-        s = JobSummary(
-            id=self._next_summary_id(),
-            job_id=summary["job_id"],
-            total_spend_inr=summary["total_spend_inr"],
-            total_spend_usd=summary["total_spend_usd"],
-            top_merchants=summary["top_merchants"],
-            anomaly_count=summary["anomaly_count"],
-            narrative=summary["narrative"],
-            risk_level=summary["risk_level"],
-            created_at=_utcnow(),
-        )
-        self._summaries[s.job_id] = s
-
-    def get_summary(self, job_id: str) -> JobSummary | None:
-        return self._summaries.get(job_id)
-
-    def list_transactions(
-        self, job_id: str, *, limit: int = 50, offset: int = 0
-    ) -> list[Transaction]:
-        rows = sorted(self._txns.get(job_id, []), key=lambda t: (t.date, t.id), reverse=True)
-        return rows[offset : offset + limit]
-
-    def count_transactions(self, job_id: str) -> int:
-        return len(self._txns.get(job_id, []))
-
-    def list_jobs(
-        self, *, limit: int = 50, offset: int = 0, status: str | None = None
-    ) -> tuple[list[Job], int]:
-        all_jobs = sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)
-        if status is not None:
-            all_jobs = [j for j in all_jobs if j.status == status]
-        return all_jobs[offset : offset + limit], len(all_jobs)
-
-    @staticmethod
-    def _coerce(row: dict[str, Any]) -> dict[str, Any]:
-        from datetime import date
-
-        out = dict(row)
-        if isinstance(out.get("date"), str):
-            out["date"] = date.fromisoformat(out["date"])
-        out.setdefault("merchant", "")
-        out.setdefault("status", "")
-        out.setdefault("category", "Uncategorised")
-        out.setdefault("account_id", "")
-        out.setdefault("is_anomaly", False)
-        out.setdefault("anomaly_reason", None)
-        out.setdefault("llm_category", None)
-        out.setdefault("llm_raw_response", None)
-        out.setdefault("llm_failed", False)
-        out.pop("id", None)  # id is assigned by the store, not from the worker
-        return out
-
-    def _next_summary_id(self) -> int:
-        return (max((s.id for s in self._summaries.values()), default=0) or 0) + 1
 
 
 # --------------------------------------------------------------------------- #

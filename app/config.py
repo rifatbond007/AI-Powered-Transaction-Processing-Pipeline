@@ -17,7 +17,6 @@ class Settings(BaseSettings):
 
     app_env: str = Field(default="development", alias="APP_ENV")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    use_in_memory_store: bool = Field(default=False, alias="USE_IN_MEMORY_STORE")
 
     # ---- Infra ----
     database_url: str = Field(

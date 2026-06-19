@@ -7,7 +7,6 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
-    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -54,7 +53,7 @@ class Transaction(Base):
 
     __tablename__ = "transactions"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("jobs.id", ondelete="CASCADE"),
@@ -90,7 +89,7 @@ class JobSummary(Base):
 
     __tablename__ = "job_summaries"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     job_id: Mapped[str] = mapped_column(
         String(36),
         ForeignKey("jobs.id", ondelete="CASCADE"),

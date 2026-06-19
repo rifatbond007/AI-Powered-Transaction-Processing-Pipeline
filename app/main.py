@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from app.config import get_settings
 from app.dependencies import get_job_store, set_job_store
 from app.routes import health, jobs
-from app.adapters.storage import InMemoryJobStore, SqlJobStore
+from app.adapters.storage import SqlJobStore
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +28,13 @@ async def lifespan(app: FastAPI):
         existing = get_job_store()
         logger.info("Reusing pre-registered JobStore: %s", type(existing).__name__)
     except RuntimeError:
-        if settings.app_env == "test" or settings.use_in_memory_store:
-            set_job_store(InMemoryJobStore())
-            logger.info("Initialized in-memory JobStore")
-        else:
-            from app.database import get_engine, get_session_factory
-            from app.models import Base
+        from app.database import get_engine, get_session_factory
+        from app.models import Base
 
-            engine = get_engine()
-            Base.metadata.create_all(bind=engine)
-            set_job_store(SqlJobStore(get_session_factory()))
-            logger.info("Initialized SQL JobStore")
+        engine = get_engine()
+        Base.metadata.create_all(bind=engine)
+        set_job_store(SqlJobStore(get_session_factory()))
+        logger.info("Initialized SQL JobStore")
 
     try:
         yield

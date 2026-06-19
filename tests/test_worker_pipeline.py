@@ -10,7 +10,6 @@ import pytest
 @pytest.fixture(autouse=True)
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_ENV", "test")
-    monkeypatch.setenv("USE_IN_MEMORY_STORE", "1")
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")
     monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
@@ -33,11 +32,9 @@ def test_worker_processes_csv_end_to_end(sample_csv_path) -> None:
     """Worker reads CSV -> cleans -> flags anomalies -> classifies -> summarises -> persists."""
     from app.services import llm, worker
     from app.dependencies import get_job_store
-    from app.adapters.storage import InMemoryJobStore
+    from tests.conftest import make_sql_store
 
-    store = InMemoryJobStore()
-    get_job_store.__globals__["_store"] = store  # type: ignore[attr-defined]
-    # Easier: just set the module-level reference directly.
+    store, *_ = make_sql_store()
     import app.dependencies as deps
 
     deps._store = store
@@ -68,9 +65,9 @@ def test_worker_processes_csv_end_to_end(sample_csv_path) -> None:
 def test_worker_marks_job_failed_on_etl_error(tmp_path) -> None:
     import app.dependencies as deps
     from app.services import worker
-    from app.adapters.storage import InMemoryJobStore
+    from tests.conftest import make_sql_store
 
-    store = InMemoryJobStore()
+    store, *_ = make_sql_store()
     deps._store = store
 
     job = store.create_job(filename="missing.csv", row_count_raw=0)
@@ -89,9 +86,9 @@ def test_worker_marks_llm_failure_does_not_fail_job(sample_csv_path) -> None:
     """PDF §5(e): a failed LLM call marks the batch llm_failed, not the whole job."""
     import app.dependencies as deps
     from app.services import llm, worker
-    from app.adapters.storage import InMemoryJobStore
+    from tests.conftest import make_sql_store
 
-    store = InMemoryJobStore()
+    store, *_ = make_sql_store()
     deps._store = store
 
     job = store.create_job(filename="sample.csv", row_count_raw=0)
@@ -123,12 +120,12 @@ def test_upload_cleanup_runs_on_success(sample_csv_path, tmp_path, monkeypatch) 
     """After the worker finishes, the temp upload file is removed."""
     import app.dependencies as deps
     from app.services import llm, worker
-    from app.adapters.storage import InMemoryJobStore
+    from tests.conftest import make_sql_store
 
     upload_dir = tmp_path / "uploads"
     upload_dir.mkdir()
 
-    store = InMemoryJobStore()
+    store, *_ = make_sql_store()
     deps._store = store
 
     job = store.create_job(filename="test.csv", row_count_raw=0)
