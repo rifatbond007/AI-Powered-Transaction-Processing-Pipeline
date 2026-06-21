@@ -45,7 +45,6 @@ data/
 
 # ---- Assignment input files (not part of the project) ----
 Backend_DevOps_Assignment.pdf
-transactions.csv
 
 # ---- Tooling caches ----
 .puku-cli/
