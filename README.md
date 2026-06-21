@@ -98,43 +98,7 @@ Every requirement from the assignment is implemented and traceable:
 
 ### High-level flow
 
-```
-                  ┌─────────────────────────────────────────────────────────┐
-                  │                                                         │
-  CSV  ──POST──▶  │  FastAPI (app/main.py)                                  │
-                  │   ├─ routes/jobs.py  ── creates Job, streams upload      │
-                  │   └─ adapters/queue.py ── enqueues process_job          │
-                  └────────────────────────┬────────────────────────────────┘
-                                           │
-                                           ▼
-                          ┌────────────────────────────┐
-                          │  Redis 7  +  RQ  queue     │
-                          │  (signals "ready to work") │
-                          └─────────────┬──────────────┘
-                                        │
-                                        ▼
-                          ┌────────────────────────────┐
-                          │  RQ Worker (services/worker.py)
-                          │   1. run_etl              │
-                          │   2. flag_anomalies       │
-                          │   3. llm.classify (batch) │
-                          │   4. llm.generate_summary │
-                          │   5. persist              │
-                          └─────────────┬──────────────┘
-                                        │
-                                        ▼
-                          ┌────────────────────────────┐
-                          │  Postgres 16               │
-                          │   ├─ jobs                 │
-                          │   ├─ transactions         │
-                          │   └─ job_summaries        │
-                          └─────────────┬──────────────┘
-                                        │
-                          ┌─────────────▼──────────────┐
-   HTTP client  ──poll──▶ │  FastAPI reads from store  │
-                          │  (single source of truth)  │
-                          └────────────────────────────┘
-```
+![High-level architecture diagram](image.png)
 
 ### Why this shape
 
