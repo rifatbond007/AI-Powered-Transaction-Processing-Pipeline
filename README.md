@@ -98,7 +98,7 @@ Every requirement from the assignment is implemented and traceable:
 
 ### High-level flow
 
-![High-level architecture diagram](image.png)
+![High-level architecture diagram](docs/images/image.png)
 
 ### Why this shape
 
@@ -498,109 +498,7 @@ For a 1,000-row CSV with 100 uncategorised rows, typical total job time is
 A single CSV upload traverses these stages. Each stage has a clear input/output
 contract, which is what makes the system debuggable.
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 1 — INGRESS (API process)                                         │
-│                                                                         │
-│   POST /jobs/upload                                                     │
-│     ├─ validate Content-Type  → 415 if not in allowlist                 │
-│     ├─ stream to upload_dir/<job_id>.csv (chunked, 64 KiB)              │
-│     │     └─ abort if size > MAX_UPLOAD_BYTES (10 MiB) → 413            │
-│     │     └─ abort if size == 0                       → 400            │
-│     ├─ INSERT INTO jobs (status='pending', row_count_raw=0)             │
-│     ├─ pd.read_csv(upload_path) → row_count_raw → UPDATE jobs           │
-│     └─ RQ.enqueue(process_job, job_id, csv_path)                        │
-│                                                                         │
-│   Output: 202 Accepted {job_id, status:"pending", row_count_raw}        │
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 2 — QUEUE (Redis 7)                                               │
-│                                                                         │
-│   RQ list 'default' holds {job_id, csv_path} tuples.                    │
-│   FIFO order; multiple workers pop in parallel.                          │
-│   On worker crash, RQ re-enqueues after visibility timeout (default 60s)│
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 3 — ETL (worker process, in-memory)                               │
-│                                                                         │
-│   pd.read_csv(csv_path, dtype=str, keep_default_na=False)               │
-│     → for each row:                                                      │
-│         parse date (try 5 formats)                                      │
-│         parse amount (strip $,€,£,¥, commas)                            │
-│         upper-case currency; reject if empty                            │
-│         upper-case status; default ''                                   │
-│         fill missing category → 'Uncategorised'                         │
-│         regenerate missing txn_id → 'TXN_GEN_<idx>'                     │
-│         reject if missing account_id                                    │
-│         dedupe on (txn_id, date, amount, account_id)                    │
-│                                                                         │
-│   Output: CleanResult {rows: [...], quarantine: [...], row_count_raw}  │
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 4 — ANOMALY (worker process, in-memory)                           │
-│                                                                         │
-│   pd.DataFrame(rows)                                                    │
-│     ├─ Rule A: amount > 3× groupby(account_id).amount.transform(median) │
-│     └─ Rule B: currency=='USD' AND merchant in {Swiggy,Ola,IRCTC}      │
-│                                                                         │
-│   Output: rows with {is_anomaly: bool, anomaly_reason: str|null}        │
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 5 — LLM CLASSIFY (worker process, network)                        │
-│                                                                         │
-│   filter rows where category == 'Uncategorised'                        │
-│   batch = chunks of 20                                                  │
-│     ├─ build JSON prompt with merchant/amount/currency                  │
-│     ├─ POST to Gemini (json_mode=True)                                  │
-│     ├─ tenacity retry × 3 with backoff (1s, 2s, 4s)                     │
-│     └─ extract JSON → coerce to PDF_CATEGORIES → attach llm_category    │
-│                                                                         │
-│   On batch failure: mark all 20 rows llm_failed=True; job continues.   │
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 6 — PERSIST TRANSACTIONS (worker process, DB write)                │
-│                                                                         │
-│   BEGIN                                                                 │
-│     INSERT INTO transactions (...) VALUES (...), (...) -- bulk          │
-│   COMMIT                                                                │
-│   UPDATE jobs SET row_count_clean=N                                     │
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 7 — LLM SUMMARISE (worker process, network)                       │
-│                                                                         │
-│   build payload = {total_spend_by_currency, top_3_merchants,            │
-│                    anomaly_count, total_spend_inr, total_spend_usd}     │
-│   single Gemini call (json_mode=True, temperature=0.7)                  │
-│   tenacity retry × 3                                                   │
-│                                                                         │
-│   On failure: deterministic fallback                                    │
-│     narrative: "LLM narrative unavailable."                             │
-│     risk_level: high if anomalies>3, medium if >0, else low             │
-└─────────────────────────────────────────────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│ STAGE 8 — PERSIST SUMMARY + DONE (worker process, DB write)             │
-│                                                                         │
-│   BEGIN                                                                 │
-│     INSERT INTO job_summaries (...)                                     │
-│     UPDATE jobs SET status='completed', completed_at=now()              │
-│   COMMIT                                                                │
-│   unlink upload_dir/<job_id>.csv                                        │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+![Data flow — end to end](docs/images/image%20copy.png)
 
 **Read path** (client polling `/jobs/{id}/status` or `/results`) is just
 `SELECT … FROM jobs / transactions / job_summaries WHERE id = ?` — sub-10ms
