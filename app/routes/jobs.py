@@ -22,6 +22,7 @@ from app.schemas import (
     TransactionRead,
 )
 from app.services.etl import run_etl
+from app.services.fx import to_inr
 from app.services.upload import save_upload
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,16 @@ def get_job_results(job_id: str, store: JobStore = Depends(get_job_store)) -> Jo
         )
     txns = store.list_transactions(job_id, limit=200, offset=0)
     llm_failures = sum(1 for t in txns if t.llm_failed)
+
+    # Per-category spend breakdown (effective category = llm_category if available)
+    from collections import defaultdict
+
+    category_totals: dict[str, float] = defaultdict(float)
+    for t in txns:
+        effective = (t.llm_category or t.category) if not t.llm_failed else t.category
+        category_totals[effective] += to_inr(t.amount, t.currency)
+    category_breakdown = {k: round(v, 2) for k, v in sorted(category_totals.items())}
+
     return JobResults(
         job=JobStatus(**_serialize_job(job)),
         transactions=[TransactionRead.model_validate(_serialize_txn(t)) for t in txns],
@@ -174,5 +185,6 @@ def get_job_results(job_id: str, store: JobStore = Depends(get_job_store)) -> Jo
             narrative=summary.narrative,
             risk_level=summary.risk_level,
         ),
+        category_breakdown=category_breakdown,
         llm_failures=llm_failures,
     )

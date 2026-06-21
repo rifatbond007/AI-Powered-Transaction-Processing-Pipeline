@@ -21,6 +21,7 @@ ALLOWED_CONTENT_TYPES = (
     "application/csv",
     "application/vnd.ms-excel",  # common Windows browser behaviour
     "text/plain",  # some clients send this for .csv
+    "application/octet-stream",  # curl -F sends this by default
 )
 
 

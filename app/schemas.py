@@ -87,6 +87,7 @@ class JobResults(BaseModel):
     job: JobStatus
     transactions: list[TransactionRead]
     summary: JobSummaryRead
+    category_breakdown: dict[str, float]
     llm_failures: int
 
 

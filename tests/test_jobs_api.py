@@ -85,6 +85,10 @@ def test_upload_returns_202_and_runs_worker_inline() -> None:
         assert data["summary"]["narrative"] == "Routine."
         # Anomalies: rule B fires on the Ola and IRCTC rows (USD + domestic brands).
         assert data["summary"]["anomaly_count"] >= 2
+        # Per-category spend breakdown (PDF §4 requirement)
+        assert "category_breakdown" in data
+        assert isinstance(data["category_breakdown"], dict)
+        assert len(data["category_breakdown"]) > 0
 
 
 def test_status_404_for_unknown_job() -> None:
