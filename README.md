@@ -1,36 +1,53 @@
 # AI-Powered Transaction Processing Pipeline
 
-> **Interviewer TL;DR** — A FastAPI + RQ + Postgres service that ingests a messy
-> `transactions.csv`, runs a defensive ETL → anomaly detection → LLM
-> classification → LLM narrative on it asynchronously, and exposes the
-> structured output via a small REST API. Built end-to-end as a Backend /
-> DevOps assignment. One-command bring-up with `make up`, full test suite
-> with `make test`.
+A FastAPI + RQ + Postgres service that ingests a messy `transactions.csv`,
+runs a defensive ETL → anomaly detection → LLM classification → LLM
+narrative on it asynchronously, and exposes the structured output via a
+small REST API.
+
+**At a glance**
+
+| | |
+|---|---|
+| Stack | Python 3.12, FastAPI, SQLAlchemy 2, RQ, Postgres 16, Redis 7, Gemini 2.5 Flash |
+| Bring-up | `make up` (full stack via docker-compose) |
+| Tests | `make test` (~30 tests, < 5 s, no external services) |
+| API docs | <http://localhost:8000/docs> after `make up` |
+| Spec coverage | See [docs/SPEC_COMPLIANCE.md](docs/SPEC_COMPLIANCE.md) (~100% of PDF §4–§9) |
+
+**Diagrams:** [§3 High-level flow](#3-architecture) ·
+[§6.2 Data flow](#62-data-flow) ·
+[§6.5 Scaling strategy](#65-scaling-strategy)
 
 ---
 
 ## Table of Contents
 
 1. [What This Project Does](#1-what-this-project-does)
-2. [PDF Spec Compliance](#2-pdf-spec-compliance)
+2. [Quick Start](#2-quick-start)
 3. [Architecture](#3-architecture)
-4. [Quick Start](#4-quick-start)
-5. [API Contract](#5-api-contract)
-6. [ETL Rules — Defensive by Design](#6-etl-rules--defensive-by-design)
-7. [Anomaly Detection](#7-anomaly-detection)
-8. [LLM Integration](#8-llm-integration)
-9. [Design Decisions & Tradeoffs](#9-design-decisions--tradeoffs)
-10. [Project Layout](#10-project-layout)
-11. [Testing](#11-testing)
-12. [DevOps & CI](#12-devops--ci)
-13. [What I'd Improve Next in Production](#13-what-id-improve-next-in-production)
-14. [System Design & Scaling](#14-system-design--scaling)
-    - [14.1 System Design Overview](#141-system-design-overview)
-    - [14.2 Data Flow — End to End](#142-data-flow--end-to-end)
-    - [14.3 Bottlenecks & Failure Modes](#143-bottlenecks--failure-modes)
-    - [14.4 Scaling Strategy](#144-scaling-strategy)
-    - [14.5 Capacity Estimates](#145-capacity-estimates)
-    - [14.6 Observability Checklist](#146-observability-checklist)
+4. [API Contract](#4-api-contract)
+5. [ETL Rules — Defensive by Design](#5-etl-rules--defensive-by-design)
+6. [System Design & Scaling](#6-system-design--scaling)
+   - [6.1 Topology & Lifecycle](#61-topology--lifecycle)
+   - [6.2 Data Flow](#62-data-flow)
+   - [6.3 Bottlenecks & Failure Modes](#63-bottlenecks--failure-modes)
+   - [6.4 Capacity Estimates](#64-capacity-estimates)
+   - [6.5 Scaling Strategy](#65-scaling-strategy)
+   - [6.6 Observability](#66-observability)
+7. [LLM Integration](#7-llm-integration)
+8. [Design Decisions & Tradeoffs](#8-design-decisions--tradeoffs)
+9. [Project Layout](#9-project-layout)
+10. [Testing](#10-testing)
+11. [DevOps & CI](#11-devops--ci)
+12. [Roadmap](#12-roadmap)
+
+**See also:**
+
+- [docs/SPEC_COMPLIANCE.md](docs/SPEC_COMPLIANCE.md) — full PDF §4–§9 traceability matrix
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — topology, data flow, bottlenecks, scaling phases, capacity
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — metrics, logs, traces, alerts, health checks
+- [docs/ROADMAP.md](docs/ROADMAP.md) — 12 prioritized production improvements
 
 ---
 
@@ -56,67 +73,9 @@ inconsistent casing, nulls, and duplicates, this service:
 
 ---
 
-## 2. PDF Spec Compliance
+## 2. Quick Start
 
-Every requirement from the assignment is implemented and traceable:
-
-| PDF Section | Requirement | Implementation | Status |
-|---|---|---|---|
-| §4 | Async ingest endpoint, returns `202` | `app/routes/jobs.py:66` — `POST /jobs/upload` | ✅ |
-| §4 | `job_id` returned | `JobUploadResponse.job_id` | ✅ |
-| §4 | `GET /jobs` list | `app/routes/jobs.py:118` | ✅ |
-| §4 | `GET /jobs/{id}/status` | `app/routes/jobs.py:130` | ✅ |
-| §4 | `GET /jobs/{id}/results` | `app/routes/jobs.py:148` | ✅ |
-| §4 | Async worker processes job | `app/services/worker.py` + RQ | ✅ |
-| §5(a) | Mixed date formats | `etl.py:26-32` — 5 formats tried | ✅ |
-| §5(a) | Currency symbols stripped | `etl.py:35` regex | ✅ |
-| §5(a) | Currency case normalised | `etl.py:149` `.upper()` | ✅ |
-| §5(a) | Status case normalised | `etl.py:157` `.upper()` | ✅ |
-| §5(a) | Missing `category` → `"Uncategorised"` | `etl.py:160` | ✅ |
-| §5(a) | Missing `txn_id` regenerated | `etl.py:163-166` | ✅ |
-| §5(a) | Missing `account_id` → quarantine | `etl.py:127-130` | ✅ |
-| §5(a) | Bad date / amount → quarantine | `etl.py:133-146` | ✅ |
-| §5(a) | Duplicates → quarantine | `etl.py:169-173` | ✅ |
-| §5(b) | Amount > 3× per-account median | `anomaly.py:47-52` | ✅ |
-| §5(b) | USD paid to domestic-only brand | `anomaly.py:55-61` | ✅ |
-| §5(c) | Batch uncategorised rows for LLM | `llm.py:187-219`, batch size 20 | ✅ |
-| §5(d) | Single summary call after persistence | `llm.py:222-248` | ✅ |
-| §5(e) | Retries (3× with backoff) | `llm.py:49-87` via tenacity | ✅ |
-| §5(e) | LLM failure does NOT fail the job | `worker.py:99-162` — only ETL/DB/IO errors mark job failed | ✅ |
-| §5(f) | Output: transactions + summary | `schemas.py:51-92` | ✅ |
-| §6 | Persist Job / Transaction / JobSummary | `app/models.py` | ✅ |
-| §7 | Containerised, multi-service compose | `Dockerfile` + `docker-compose.yml` | ✅ |
-| §7 | Worker as separate service | `docker-compose.yml:79-102` | ✅ |
-| §8 | CI runs lint + test + docker build | `.github/workflows/ci.yml` | ✅ |
-| §9 | README with run instructions | This file | ✅ |
-
-**Coverage: ~100% of the assignment spec, all major and minor clauses.**
-
----
-
-## 3. Architecture
-
-### High-level flow
-
-![High-level architecture diagram](docs/images/image.png)
-
-### Why this shape
-
-- **HTTP layer / business logic / infrastructure are cleanly separated** —
-  `routes/`, `services/`, `adapters/`. Swapping Redis for Kafka, or Postgres
-  for SQLite, does not touch routes or business code.
-- **JobStore is an ABC** (`app/adapters/storage.py`) with a single concrete
-  `SqlJobStore` implementation. Tests use SQLite via `StaticPool`; production
-  uses Postgres. Both share the same SQLAlchemy models.
-- **The store is the source of truth for job status** — RQ is only used to
-  signal "ready to process". This means a job can be cancelled, retried, or
-  inspected by reading the DB directly, without parsing RQ internals.
-
----
-
-## 4. Quick Start
-
-### Option A — Docker (recommended, 30 seconds)
+### Option A — Docker (recommended, ~30 seconds)
 
 ```bash
 cp .env.example .env
@@ -127,18 +86,14 @@ make up
 Wait ~10 seconds, then:
 
 ```bash
-curl http://localhost:8000/health
-# {"status":"ok"}
-
-# Upload + poll + fetch
+curl http://localhost:8000/health                                # {"status":"ok"}
 JOB=$(curl -sS -F file=@transactions.csv http://localhost:8000/jobs/upload | jq -r .job_id)
-curl -sS http://localhost:8000/jobs/$JOB/status | jq .
-curl -sS http://localhost:8000/jobs/$JOB/results | jq .
+curl -sS http://localhost:8000/jobs/$JOB/status | jq .           # poll until completed/failed
+curl -sS http://localhost:8000/jobs/$JOB/results | jq .          # transactions + summary
 ```
 
-Interactive API docs: <http://localhost:8000/docs>
-
-`make down` stops and wipes the DB volume.
+Interactive API docs: <http://localhost:8000/docs>. `make down` stops and
+wipes the DB volume.
 
 ### Option B — Local Python (no Docker)
 
@@ -154,12 +109,31 @@ Worker runs separately with `make worker` (requires Redis on `localhost:6379`).
 
 Both LLM calls return `{"llm_failed": True}` after retries. The pipeline
 **still completes** — ETL, anomaly detection, persistence, and a
-deterministic-fallback summary all work. This is the right failure mode for
-evaluating the non-LLM logic.
+deterministic-fallback summary all work.
 
 ---
 
-## 5. API Contract
+## 3. Architecture
+
+![High-level architecture diagram](docs/images/image.png)
+
+*FastAPI edge tier enqueues jobs into Redis/RQ, workers run ETL → anomaly → LLM classify → LLM summarise → Postgres, with external Gemini calls.*
+
+### Why this shape
+
+- **HTTP layer / business logic / infrastructure are cleanly separated** —
+  `routes/`, `services/`, `adapters/`. Swapping Redis for Kafka, or Postgres
+  for SQLite, does not touch routes or business code.
+- **JobStore is an ABC** (`app/adapters/storage.py`) with a single concrete
+  `SqlJobStore` implementation. Tests use SQLite via `StaticPool`; production
+  uses Postgres. Both share the same SQLAlchemy models.
+- **The store is the source of truth for job status** — RQ is only used to
+  signal "ready to process". A job can be cancelled, retried, or inspected
+  by reading the DB directly, without parsing RQ internals.
+
+---
+
+## 4. API Contract
 
 | Method | Path | Status Codes | Purpose |
 |---|---|---|---|
@@ -179,29 +153,9 @@ evaluating the non-LLM logic.
 | `415` | Unsupported `Content-Type` (only `text/csv`, `application/csv`, `application/vnd.ms-excel`, `text/plain`, `application/octet-stream` accepted) |
 | `503` | Failed to enqueue (Redis down) — the Job is marked `failed` so the client can see why |
 
-### Example: full upload → poll → fetch loop
-
-```bash
-JOB=$(curl -sS -F file=@transactions.csv http://localhost:8000/jobs/upload | jq -r .job_id)
-echo "job: $JOB"
-
-while true; do
-  STATUS=$(curl -sS http://localhost:8000/jobs/$JOB/status | jq -r .status)
-  echo "  status: $STATUS"
-  [ "$STATUS" = "completed" -o "$STATUS" = "failed" ] && break
-  sleep 2
-done
-
-curl -sS http://localhost:8000/jobs/$JOB/results | jq '{
-  summary,
-  llm_failures: (.transactions | map(select(.llm_failed)) | length),
-  anomaly_count: (.transactions | map(select(.is_anomaly)) | length)
-}'
-```
-
 ---
 
-## 6. ETL Rules — Defensive by Design
+## 5. ETL Rules — Defensive by Design
 
 The pipeline (`app/services/etl.py`) **never silently drops** a row — every
 rejected row appears in `CleanResult.quarantine` with a human-readable reason.
@@ -218,90 +172,134 @@ rejected row appears in `CleanResult.quarantine` with a human-readable reason.
 | **Unparseable date / amount** | Quarantined with the offending raw value in the reason |
 | **Duplicates** | Detected on `(txn_id, date, amount, account_id)`, quarantined |
 
-The output dict shape is the contract for downstream stages:
-
-```python
-{
-  "txn_id": str, "date": "YYYY-MM-DD", "merchant": str,
-  "amount": float, "currency": str, "status": str,
-  "category": str, "account_id": str,
-}
-```
+Two anomaly rules apply (`app/services/anomaly.py`): `amount_3x_median`
+(amount > 3× median for the same `account_id`) and `usd_domestic` (USD paid
+to Swiggy / Ola / IRCTC). Both can fire — reasons join with `+`.
 
 ---
 
-## 7. Anomaly Detection
+## 6. System Design & Scaling
 
-Two rules OR'd per row (`app/services/anomaly.py`):
+A condensed view of how the system behaves under load. Full detail in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-1. **`amount_3x_median`** — row amount > 3× median for the same `account_id`.
-   Implemented via `pandas.groupby("account_id").transform("median")`.
-   Single-row accounts never trip this rule (median equals the value).
-2. **`usd_domestic`** — `currency == "USD"` AND `merchant ∈ {Swiggy, Ola, IRCTC}`.
-   INR paid to the same brands is fine.
+### 6.1 Topology & Lifecycle
 
-Both can fire on the same row. Reasons are joined with `+`, e.g.
-`amount_3x_median+usd_domestic`. The module is pure (no DB, no LLM, no I/O),
-so it has dedicated unit tests and runs in microseconds on real data.
+| Tier | Component | Role | Stateful? |
+|---|---|---|---|
+| Edge | **FastAPI** (`api` service) | Accepts uploads, creates `Job`, enqueues worker task, serves status/results reads | Stateless |
+| Queue | **Redis 7** + **RQ** | Buffers "ready to process" signals between API and workers | Yes (volatile) |
+| Compute | **RQ Worker** (`worker` service) | Runs `process_job`: ETL → anomaly → LLM classify → LLM summarise → persist | Stateless |
+| Storage | **Postgres 16** | Source of truth for jobs, transactions, summaries | Yes (durable) |
+| External | **Gemini 2.5 Flash** | LLM calls for classify + summary | Third-party |
+
+Request lifecycle: `POST /jobs/upload` → 202 in ~50 ms → ETL + anomaly
+(<1 s) → LLM classify (N/20 batches, ~1–3 s each) → persist (<500 ms) →
+LLM summary (~1–5 s) → status=completed. **5–15 s end-to-end** for a 1k-row
+CSV with 100 uncategorised rows, dominated by LLM latency.
+
+### 6.2 Data Flow
+
+![Data flow — end to end](docs/images/all-stage.png)
+
+A single CSV upload traverses eight stages: ingress → queue → ETL → anomaly →
+LLM classify → persist transactions → LLM summarise → persist summary. Each
+stage has a clear input/output contract (see [docs/ARCHITECTURE.md §3](docs/ARCHITECTURE.md#3-data-flow--end-to-end)).
+
+**Read path** (client polling `/jobs/{id}/status` or `/results`) is just
+`SELECT … FROM jobs / transactions / job_summaries WHERE id = ?` — sub-10ms
+on Postgres.
+
+### 6.3 Bottlenecks & Failure Modes
+
+Top bottlenecks, in rough order of likelihood in production:
+
+1. **LLM classify latency** — serial Gemini calls; 100 uncategorised rows = 5 × 1–3s = 5–15s.
+   Today: batching (20/call). At scale: parallelise, cache merchant→category.
+2. **Gemini API rate limits** — free-tier quotas. Today: tenacity retries. At scale: multi-provider + circuit breaker.
+3. **Worker single-process ETL** — `pd.read_csv` blocks; 100k rows ≈ 5–10s CPU. At scale: stream-parse, dedicated ETL worker pool.
+4. **Postgres bulk INSERT** — 100k rows in one transaction. At scale: `COPY` protocol, chunked commits.
+5. **Redis SPOF for queue** — workers stall if Redis dies. At scale: Sentinel / Cluster, or Postgres-backed queue (`SKIP LOCKED`).
+
+Failure modes already handled per PDF §5(e):
+
+- LLM classify failure → rows marked `llm_failed=True`, job completes ✅
+- LLM summary failure → deterministic fallback narrative ✅
+- ETL error → job marked `failed`, `error_message` stored ✅
+- Worker crash → RQ re-enqueues after visibility timeout; idempotent re-run ✅
+- Redis restart → queue rebuilds from in-flight jobs ✅
+
+Full 10-row bottleneck table at [docs/ARCHITECTURE.md §4](docs/ARCHITECTURE.md#4-bottlenecks--failure-modes).
+
+### 6.4 Capacity Estimates
+
+| Workload | Jobs/day | API QPS (peak) | Worker count | Postgres size / month | Notes |
+|---|---|---|---|---|---|
+| **Demo / interview** | ~10 | <1 | 1 | <1 MB | Single VM |
+| **Small team** | 100 | ~5 | 2 | ~30 MB | One VM, Postgres + Redis |
+| **Mid-market** | 10,000 | ~50 | 10–20 | ~3 GB | Multi-VM, Redis Sentinel, read replica |
+| **Enterprise** | 1,000,000 | ~500 | 200+ | ~300 GB | Kafka, S3, multi-region |
+
+Storage: 1 transaction row ≈ 200 bytes; 1 summary row ≈ 2 KB. At enterprise
+scale, partition `transactions` by `created_at` with 90-day retention.
+
+### 6.5 Scaling Strategy
+
+![Scaling strategy: four phases from single-host to event-sourced](docs/images/scalling.png)
+
+| Phase | Scale | Key change |
+|---|---|---|
+| **1 — Single host** (today) | ~100 jobs/day | API + worker + Postgres + Redis on one VM |
+| **2 — Horizontal workers** | ~1k jobs/day | `docker compose up --scale worker=N`; split CPU-bound ETL workers from network-bound LLM workers |
+| **3 — Multi-host prod** | ~100k jobs/day | N API replicas behind LB; Redis Sentinel; managed Postgres with read replicas; S3 for uploads; `COPY` for bulk inserts; Redis cache for status polls |
+| **4 — Event-sourced** | 1M+ jobs/day | Kafka topics per stage; streaming ETL; outbox pattern; per-tenant LLM routing; AsyncAPI contracts |
+
+Full phase detail at [docs/ARCHITECTURE.md §5](docs/ARCHITECTURE.md#5-scaling-strategy).
+
+### 6.6 Observability
+
+Prometheus metrics, structured `structlog` logs, OpenTelemetry traces across
+API → RQ → worker → LLM → DB. Alert examples: job failure rate spike,
+worker queue depth growing, LLM failure rate, API p99 latency, Postgres
+connection pool exhaustion.
+
+Full metric catalogue, log fields, trace IDs, and alert conditions at
+[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md).
 
 ---
 
-## 8. LLM Integration
+## 7. LLM Integration
 
 - **Provider**: Gemini 2.5 Flash via `google-genai` (free tier, no spend).
   Configure with `GOOGLE_API_KEY`.
 - **Batch size**: 20 rows per `classify_categories` call
   (`LLM_BATCH_SIZE=20`, env-overridable).
 - **Retry**: 3 attempts, exponential backoff (1s, 2s, 4s) via `tenacity`.
-  Retries cover `google.genai.errors.ClientError` and `ServerError`.
-- **JSON extraction**: handles bare JSON, ` ```json ` fences, and prose with
-  an embedded JSON object — defensive against common LLM output shapes.
-- **Failure isolation** (PDF §5(e)):
-  - A failed batch is marked `llm_failed=True` on each row in the batch.
-  - The **job still completes** — only ETL/DB/IO errors mark the job `failed`.
-  - The summary call falls back to a deterministic narrative
-    (`"LLM narrative unavailable."`) with a rule-based `risk_level`
-    (`high` if >3 anomalies, `medium` if >0, else `low`).
+- **Failure isolation**: a failed batch marks all rows `llm_failed=True`; the
+  job still completes — only ETL/DB/IO errors mark the job `failed`. The
+  summary falls back to a rule-based narrative + risk level
+  (`high` if >3 anomalies, `medium` if >0, else `low`).
 
-### Output of the summary call
-
-```json
-{
-  "total_spend_by_currency": {"INR": 12345.67, "USD": 89.10},
-  "top_3_merchants": [{"merchant": "Swiggy", "total_inr": 4321.0}, ...],
-  "anomaly_count": 2,
-  "narrative": "Routine month with 2 anomalies concentrated on ACC004.",
-  "risk_level": "medium"
-}
-```
-
-### Why Gemini and not OpenAI
-
-Free tier, no spend required, and the assignment explicitly says "any
-free-tier LLM is fine". The LLM client is isolated to `app/services/llm.py` —
-swapping providers is one file.
+Provider isolated to `app/services/llm.py` — swapping is one file.
 
 ---
 
-## 9. Design Decisions & Tradeoffs
+## 8. Design Decisions & Tradeoffs
 
 | Decision | Rationale |
 |---|---|
 | **RQ + Redis (not Celery)** | RQ is pure-Python, simpler, and matches the single-queue topology. Celery's broker / result-backend complexity is overkill here. |
-| **Async, job-based (not synchronous)** | LLM calls + ETL can take seconds. Returning a `job_id` and letting the client poll is the right UX for this workload. |
-| **`JobStore` ABC + SQLAlchemy ORM** | Routes and worker don't care about storage. Tests use SQLite; production uses Postgres. The store interface is small and obvious. |
-| **Store as source of truth (not RQ)** | Job state lives in Postgres. RQ is fire-and-forget. Cancelling / retrying / inspecting a job = `SELECT * FROM jobs WHERE id = ?`. |
+| **Async, job-based (not synchronous)** | LLM calls + ETL can take seconds. Returning a `job_id` and letting the client poll is the right UX. |
+| **`JobStore` ABC + SQLAlchemy ORM** | Routes and worker don't care about storage. Tests use SQLite; production uses Postgres. |
+| **Store as source of truth (not RQ)** | Job state lives in Postgres. Cancelling / retrying / inspecting a job = `SELECT * FROM jobs WHERE id = ?`. |
 | **Pydantic v2** | 5–50× faster than v1, better type inference, native discriminated unions. |
-| **Static FX rates** | The PDF doesn't call out an FX source; static rates match the spec. A real system would call a rates API with caching. |
-| **`Decimal` → `float`** in API | JSON has no `Decimal` type; amounts are rounded to 2dp at ETL time. Acceptable for amounts up to ~9 trillion INR. |
 | **No Alembic** | Out of scope for the assignment. `Base.metadata.create_all()` is fine for fresh DBs. Production would add Alembic with a baseline migration. |
-| **Multi-stage Dockerfile** | Final image has no compiler, no `.pyc` cache. ~370 MB. Non-root user (`appuser`, uid 1000). |
 | **SQLAlchemy parameter binding everywhere** | No f-string SQL. Injection-safe by construction. |
-| **Tenacity for retries** | Production-grade retry lib with explicit attempt counts and backoff. Easier to test than hand-rolled retry loops. |
+| **Tenacity for retries** | Production-grade retry lib with explicit attempt counts and backoff. |
 
 ---
 
-## 10. Project Layout
+## 9. Project Layout
 
 ```
 .
@@ -309,54 +307,28 @@ swapping providers is one file.
 │   ├── main.py                # FastAPI app + lifespan
 │   ├── config.py              # Pydantic settings (env-driven)
 │   ├── database.py            # SQLAlchemy engine + session factory
-│   ├── models.py              # ORM models: Job, Transaction, JobSummary
+│   ├── models.py              # ORM: Job, Transaction, JobSummary
 │   ├── schemas.py             # Pydantic request/response models
-│   ├── dependencies.py        # FastAPI DI: get_job_store / set_job_store
-│   │
-│   ├── adapters/              # Infrastructure layer (swappable)
-│   │   ├── queue.py           # RQ get_queue + enqueue_process_job
-│   │   └── storage.py         # JobStore ABC + SqlJobStore (Postgres/SQLite)
-│   │
-│   ├── routes/                # HTTP layer
-│   │   ├── health.py
-│   │   └── jobs.py            # /jobs/upload, /jobs, /jobs/{id}/{status,results}
-│   │
-│   └── services/              # Business logic (pure, testable)
-│       ├── etl.py             # Defensive CSV cleaning
-│       ├── anomaly.py         # 3× median + USD-domestic rules
-│       ├── llm.py             # Gemini classifier + summary (retried)
-│       ├── fx.py              # Static rates + to_inr helper
-│       ├── upload.py          # CSV upload lifecycle (save + cleanup)
-│       └── worker.py          # RQ task: process_job (orchestrates the pipeline)
-│
-├── scripts/
-│   └── entrypoint.py          # Container entrypoint: wait for DB/Redis, ensure schema, exec CMD
-│
-├── tests/                     # pytest suite (~30 tests, no external services required)
-│   ├── conftest.py            # Shared fixtures (sample CSV, SQL store factory)
-│   ├── test_etl.py            # §5(a) cleaning rules
-│   ├── test_anomaly.py        # §5(b) anomaly rules
-│   ├── test_llm.py            # §5(c-e) batching, retry, JSON extraction
-│   ├── test_jobs_api.py       # §4 endpoint contract
-│   ├── test_worker_pipeline.py # End-to-end worker with mocked LLM
-│   └── test_api.py            # /health smoke test
-│
-├── .github/workflows/
-│   └── ci.yml                 # Lint + test (with coverage threshold) + Docker build
-│
+│   ├── dependencies.py        # FastAPI DI
+│   ├── adapters/              # Swappable infrastructure (queue, storage)
+│   ├── routes/                # HTTP layer (health, jobs)
+│   └── services/              # Business logic: etl, anomaly, llm, fx, upload, worker
+├── scripts/entrypoint.py      # Container entrypoint: wait for DB/Redis, ensure schema
+├── tests/                     # ~30 pytest tests, no external services required
+├── docs/                      # ARCHITECTURE, SPEC_COMPLIANCE, OBSERVABILITY, ROADMAP + images/
+├── .github/workflows/ci.yml   # Lint + test (coverage threshold) + Docker build
 ├── Dockerfile                 # Multi-stage, non-root, healthcheck
 ├── docker-compose.yml         # api + worker + postgres + redis + pgadmin
 ├── Makefile                   # Common dev commands
 ├── pyproject.toml             # ruff + pytest config
-├── requirements.txt           # Runtime deps
-├── requirements-dev.txt       # Test deps
+├── requirements*.txt          # Runtime + dev deps
 ├── .env.example               # Env template
 └── transactions.csv           # Sample data
 ```
 
 ---
 
-## 11. Testing
+## 10. Testing
 
 ```bash
 make test         # full suite (~30 tests, < 5 s, no services)
@@ -370,18 +342,15 @@ make lint         # ruff check + format check
   `fakeredis` for the queue, `monkeypatch` for env vars. Fast, deterministic,
   no Docker required.
 - **Real services in CI.** `.github/workflows/ci.yml` spins up `postgres:16-alpine`
-  and `redis:7-alpine` as service containers with healthchecks.
-- **LLM is always mocked** in tests — `_classify_call` and `_summarize_call` are
-  patched at the module level, so we test the orchestration and persistence
-  without spending API quota or depending on Gemini uptime.
-- **Coverage threshold** in CI: 70% (see "What I'd Improve" below for the
-  reasoning on raising it).
+  and `redis:7-alpine` as service containers.
+- **LLM is always mocked** in tests — `_classify_call` and `_summarize_call`
+  are patched at the module level.
 
-Test modules map 1:1 to spec sections — easy to find what's tested and why.
+Test modules map 1:1 to spec sections.
 
 ---
 
-## 12. DevOps & CI
+## 11. DevOps & CI
 
 ### Container
 
@@ -389,11 +358,10 @@ Test modules map 1:1 to spec sections — easy to find what's tested and why.
   venv and runs as non-root `appuser` (uid 1000).
 - **Healthcheck** — Dockerfile `HEALTHCHECK` pings `/health` every 30 s.
 - **`docker-compose.yml`** — `api` + `worker` + `postgres` + `redis` +
-  `pgadmin`. Worker shares the `uploads` named volume with the API so the
-  file written by the upload route is readable by the worker process.
+  `pgadmin`. Worker shares the `uploads` named volume with the API.
 - **Entrypoint** — `scripts/entrypoint.py` blocks on TCP for Postgres and
-  Redis, ensures the schema exists (creates tables only if missing —
-  never drops on boot), then `exec`s the CMD.
+  Redis, ensures the schema exists (creates tables only if missing), then
+  `exec`s the CMD.
 
 ### CI (`.github/workflows/ci.yml`)
 
@@ -401,294 +369,23 @@ Two jobs:
 
 1. **`test`** — `ruff check`, `ruff format --check`, `pytest --cov=app --cov-fail-under=70`
    against Postgres + Redis service containers.
-2. **`docker-build`** — Builds the API image with Buildx; uses GHA cache for
-   speed. Runs only after `test` passes.
+2. **`docker-build`** — Builds the API image with Buildx; uses GHA cache.
+   Runs only after `test` passes.
 
 Triggers: `push` and `pull_request` to `main`.
 
 ---
 
-## 13. What I'd Improve Next in Production
+## 12. Roadmap
 
-Behaviours I'd add given a longer runway, ranked by impact:
+Top production improvements (full list at [docs/ROADMAP.md](docs/ROADMAP.md)):
 
-1. **`InMemoryJobStore` implementation** of the `JobStore` ABC for unit tests
-   that don't want SQLite, and a true "no DB at all" `make dev` mode.
-2. **Alembic migrations** with a baseline, so schema evolution is reviewable.
-3. **Idempotent upload endpoint** — dedupe by file hash so re-uploading the
-   same CSV returns the existing `job_id` instead of reprocessing.
-4. **Quarantine exposure** in `/jobs/{id}/results` — currently only the count
-   is logged. Returning the bad rows with their reasons would help users
-   debug their data.
-5. **Per-job cancellation** — `DELETE /jobs/{id}` that flips status to
-   `cancelled` and tells the worker to bail (cooperative cancel via a
-   `cancelled_at` column).
-6. **Structured JSON logs** (`structlog`) + request-id correlation across
-   API → worker → DB.
-7. **Prometheus `/metrics`** — job counts by status, LLM latency histogram,
-   worker queue depth.
-8. **Rate limiting** on `/jobs/upload` (token bucket per IP) and per-tenant
-   `MAX_UPLOAD_BYTES`.
-9. **OpenAPI examples** for every endpoint — improves DX of `/docs`.
-10. **Pytest coverage threshold raised to 85–90%** with the missing edge-case
-    tests added (size limit, wrong content type, empty file, queue-down
-    behavior).
-11. **Pre-commit hooks** — `ruff format`, `ruff check`, `pytest -x` on
-    staged files.
-12. **Anomaly rule configurability** — accept a YAML/JSON of domestic brands
-    and the median multiplier per environment.
-
----
-
-## 14. System Design & Scaling
-
-This section walks through how the system actually behaves under load — what
-the hot paths are, where the backpressure shows up first, and how I'd scale it
-beyond a single VM.
-
-### 14.1 System Design Overview
-
-**Topology:** a classic three-tier async pipeline.
-
-| Tier | Component | Role | Stateful? |
-|---|---|---|---|
-| Edge | **FastAPI** (`api` service) | Accepts uploads, creates `Job`, enqueues worker task, serves status/results reads | Stateless |
-| Queue | **Redis 7** + **RQ** | Buffers "ready to process" signals between API and workers | Yes (volatile) |
-| Compute | **RQ Worker** (`worker` service) | Runs `process_job`: ETL → anomaly → LLM classify → LLM summarise → persist | Stateless |
-| Storage | **Postgres 16** | Source of truth for jobs, transactions, summaries | Yes (durable) |
-| External | **Gemini 2.5 Flash** | LLM calls for classify + summary | Third-party |
-
-**Why this shape:**
-
-- **HTTP front, worker back** — the API never blocks on LLM calls or ETL. A
-  10 MiB CSV upload returns `202` in milliseconds; the heavy lifting happens
-  out-of-band.
-- **Queue is a signal, not a state store** — losing Redis doesn't lose jobs,
-  because the DB row is created *before* enqueue. Workers re-hydrate state
-  from Postgres on every task.
-- **Store is the source of truth for status** — RQ's internal job state is
-  irrelevant for the API contract; we only ever read job status from
-  `SELECT status FROM jobs WHERE id = ?`. This makes status reads cheap,
-  consistent, and trivially auditable.
-- **Pure services** (`etl.py`, `anomaly.py`, `llm.py`) — no DB / network / I/O
-  in the business logic except where explicitly required. Easy to reason
-  about, easy to unit test.
-
-**Request → response lifecycle:**
-
-```
-T+0ms      client → POST /jobs/upload
-T+~5ms     API: create Job row (status=pending), stream upload to disk
-T+~50ms    API: count raw rows, patch Job
-T+~55ms    API: enqueue process_job → return 202 {job_id}
-T+~60ms    Worker pops task → set status=processing
-T+~60ms    ETL (pd.read_csv + cleaning)        [CPU, in-process]
-T+~200ms   Anomaly detection (groupby)         [CPU, in-process]
-T+~200ms   LLM classify — N/20 batches        [NETWORK, serial]
-T+~5–30s   LLM summary — 1 call               [NETWORK]
-T+~5.5s    Persist transactions + summary     [DB, batch INSERT]
-T+~5.5s    Set status=completed
-```
-
-For a 1,000-row CSV with 100 uncategorised rows, typical total job time is
-**5–15 seconds end-to-end**, dominated by LLM latency.
-
-### 14.2 Data Flow — End to End
-
-A single CSV upload traverses these stages. Each stage has a clear input/output
-contract, which is what makes the system debuggable.
-
-![Data flow — end to end](docs/images/all-stage.png)
-
-**Read path** (client polling `/jobs/{id}/status` or `/results`) is just
-`SELECT … FROM jobs / transactions / job_summaries WHERE id = ?` — sub-10ms
-on Postgres for any single job.
-
-### 14.3 Bottlenecks & Failure Modes
-
-Where the system slows down, fails, or loses data, in rough order of likelihood
-in production:
-
-| # | Bottleneck | Where it shows up | Why it's the limit | Mitigation today | Mitigation at scale |
-|---|---|---|---|---|---|
-| 1 | **LLM classify latency** | Job wall-clock | Serial calls to Gemini at ~1–3s each; 100 uncategorised rows = 5 batches × 1–3s = 5–15s | Batching (20 per call) | Parallelise batches; pre-classify during upload via streaming; cache common merchant→category mappings |
-| 2 | **Gemini API rate limits** | HTTP 429s from LLM | Free tier quotas (per-minute + per-day) | Tenacity retries with backoff | Multiple LLM providers with circuit breaker; queue priority for retries; reserve quota for retries |
-| 3 | **Worker single-process ETL** | Long CSVs | `pd.read_csv` is in-process, blocking; 100k rows ≈ 5–10s of CPU | None today | Move ETL to a dedicated worker pool; stream-parse CSV instead of full `read_csv` |
-| 4 | **Postgres `INSERT … bulk`** | Large CSVs | Inserting 100k transactions is one transaction | SQLAlchemy `add_all` (one transaction) | COPY protocol via `COPY … FROM STDIN`; chunked commits every 5k rows |
-| 5 | **Redis as SPOF for queue** | Worker pickup stalls | If Redis dies, no new jobs are picked up (existing jobs keep processing) | Compose restarts Redis | Redis Sentinel / Cluster; or replace with Postgres-backed queue (LISTEN/NOTIFY, or `SKIP LOCKED`) |
-| 6 | **Upload streaming blocks the request thread** | Upload latency | `routes/jobs.py:90` reads the whole CSV *during the request* to count rows | None today — fast on 10 MiB, painful on 100 MiB | Move counting to the worker; use `wc -l` subprocess for cheap row count; or skip raw count |
-| 7 | **N+1 status queries** | Polling load | 1000 clients polling `/jobs/{id}/status` per second = 1000 reads/sec | None today | Add `Cache-Control: max-age=2` for short-window polling; or push status via WebSocket / SSE |
-| 8 | **No backpressure on uploads** | Disk full | Upload dir is a shared volume; no quota per tenant | Max upload size (10 MiB) | Per-tenant quota; S3-style presigned uploads to bypass the API entirely |
-| 9 | **`completed_at` timezone-naive** | Cross-region deploys | Stored as naive datetime; "Z" suffix added on serialise | None today | `DateTime(timezone=True)` + `TIMESTAMPTZ` in Postgres |
-| 10 | **LLM `temperature=0.7` for summary** | Reproducibility | Different runs produce different narratives | Deterministic payload shape | Pin temperature for audit/repro runs; store both deterministic + narrative |
-
-**Failure modes that are already handled (PDF §5(e)):**
-
-- LLM classify failure for a batch → rows marked `llm_failed=True`, job completes ✅
-- LLM summary failure → deterministic fallback narrative + rule-based risk_level ✅
-- ETL error (bad CSV, IO error) → job marked `failed`, error_message stored ✅
-- Worker crash mid-job → RQ re-enqueues after visibility timeout; idempotent
-  re-run because `attach_transactions` is a fresh insert per job ✅
-- Redis restart → queue rebuilds from in-flight RQ jobs (workers may
-  re-process; idempotency covers this) ✅
-
-**Failure modes not yet handled (would need work):**
-
-- Postgres outage mid-write → worker raises; job stays `processing` until RQ
-  retries → eventually `failed`. No replay tool today.
-- Network partition between worker and LLM → retries exhaust → job completes
-  with `llm_failed` rows. Acceptable; no data loss.
-- Malicious 10 MiB upload every second → disk fills in minutes. Needs rate
-  limiting (see Section 13.8).
-
-### 14.4 Scaling Strategy
-
-How I'd grow this from "1 VM, demo workload" to "10k jobs/day":
-
-![Scaling strategy: four phases from single-host to event-sourced](docs/images/scalling.png)
-
-*Scaling strategy overview: Phase 1 (single host, today) → Phase 2 (horizontal workers, ~1k jobs/day) → Phase 3 (multi-host prod-grade, ~100k jobs/day) → Phase 4 (event-sourced, 1M+ jobs/day).*
-
-**Phase 1 — Single-host, vertical scale (today)**
-
-One API container + one worker container + Postgres + Redis on one host.
-Comfortable up to ~100 concurrent jobs/day.
-
-**Phase 2 — Horizontal worker scale (10× growth, ~1k jobs/day)**
-
-- Scale workers: `docker compose up --scale worker=N` (RQ supports it
-  out-of-the-box).
-- Add `WORKER_CONCURRENCY` (already in `Settings`, currently unused) →
-  `rq worker --workers N` to run N tasks per container.
-- Add a Redis-backed **RQ scheduler** for periodic cleanup of stale jobs.
-- Add a worker pool **dedicated to LLM calls** (network-bound) separate from
-  ETL workers (CPU-bound). Different container images, different
-  resource limits.
-
-```
-                    ┌─── ETL workers (CPU-bound, fast)
-worker-pool-A ──────┤
-                    └─── LLM workers (network-bound, slow)
-worker-pool-B
-```
-
-**Phase 3 — Multi-host, prod-grade (100× growth, ~100k jobs/day)**
-
-| Concern | Solution |
-|---|---|
-| API horizontal scale | Run N API replicas behind a load balancer; sessions are stateless → trivial |
-| Worker horizontal scale | N worker containers, possibly on a separate node pool |
-| Redis HA | Redis Sentinel (3-node) or AWS ElastiCache with cluster mode |
-| Postgres HA | Managed Postgres (RDS / Cloud SQL) with read replicas for the `/results` endpoint |
-| Object storage for uploads | Replace `upload_dir` volume with S3; the API gets a presigned URL, the worker downloads from S3 |
-| Long CSV processing | Stream CSV in ETL (don't `read_csv` the whole thing); ETL becomes O(1) memory |
-| Backpressure on uploads | Per-tenant rate limit (token bucket); 429 if exceeded |
-| Large bulk inserts | `COPY` protocol, chunked into 5k-row batches, every batch a transaction |
-| Status read fan-out | Add a read replica + caching layer (Redis) for `/jobs/{id}/status` — most polls hit the cache |
-| LLM cost / latency | Cache `(merchant, currency_band, amount_band) → category` in Redis with TTL; pre-warm for top merchants |
-
-**Phase 4 — Beyond 1M jobs/day (architecture shift)**
-
-At this scale, the synchronous `Job` row → single worker → single LLM
-pattern needs to break:
-
-- **Event-sourced pipeline**: `Job created` → `Job cleaned` → `Job classified`
-  → `Job summarised` are separate Kafka topics. Each stage is its own
-  autoscaled consumer group. Failures replay from the topic, not from a
-  retry queue.
-- **Streaming ETL**: replace `pd.read_csv` with a streaming parser
-  (`pyarrow.csv` or hand-rolled) so memory is constant in CSV size.
-- **Outbox pattern** for DB writes: the worker writes "events" to an `outbox`
-  table in the same transaction as the domain change; a separate process
-  publishes them to Kafka. Solves the dual-write problem.
-- **Per-tenant LLM routing**: enterprise tenants get a dedicated Gemini
-  project with higher quotas; free tier gets the shared quota.
-- **AsyncAPI spec** for the internal event contracts.
-
-**Scaling knobs that are already in the codebase:**
-
-| Knob | Where | Default |
-|---|---|---|
-| `LLM_BATCH_SIZE` | `config.py:35` | 20 rows |
-| `MAX_UPLOAD_BYTES` | `config.py:39` | 10 MiB |
-| `WORKER_CONCURRENCY` | `config.py:30` | 1 (unused — wired in Phase 2) |
-| `RQ_QUEUE_NAME` | `config.py:29` | `default` |
-| Postgres pool size | `database.py:24` | SQLAlchemy default (5 + overflow) |
-| `pool_pre_ping` | `database.py:27` | `True` (reconnects on stale conns) |
-
-### 14.5 Capacity Estimates
-
-Back-of-envelope numbers for sizing decisions. Assumptions:
-CSV ≈ 1,000 rows, 20% uncategorised, 5 LLM batches, 5s/job.
-
-| Workload | Jobs/day | API QPS (peak) | Worker count | Postgres size / month | Notes |
-|---|---|---|---|---|---|
-| **Demo / interview** | ~10 | <1 | 1 | <1 MB | Single VM, in-memory-friendly |
-| **Small team** | 100 | ~5 | 2 | ~30 MB | One VM, Postgres + Redis |
-| **Mid-market** | 10,000 | ~50 | 10–20 | ~3 GB | Multi-VM, Redis Sentinel, read replica |
-| **Enterprise** | 1,000,000 | ~500 | 200+ | ~300 GB | Kafka, S3, multi-region |
-
-**Storage math:**
-- 1 transaction row ≈ 200 bytes (with all fields + LLM response)
-- 1 summary row ≈ 2 KB
-- 1M jobs/month × 1,000 txns/job ≈ 200 GB/month — needs partitioning by
-  `created_at` and a 90-day retention policy at this scale.
-
-**Cost math (very rough, AWS):**
-
-| Tier | Monthly cost | What you get |
-|---|---|---|
-| Demo | ~$5 | 1× t3.small API + 1× t3.small worker + RDS db.t3.micro + ElastiCache cache.t3.micro |
-| Small team | ~$80 | 2× t3.medium API + 2× t3.medium worker + RDS db.t3.medium + ElastiCache cache.t3.medium |
-| Mid-market | ~$2,000 | 4× m6i.large API + 10× m6i.large worker + RDS db.m6i.large + ElastiCache + ALB |
-| Enterprise | ~$30k+ | Multi-AZ, multi-region, Kafka, S3, dedicated LLM quota |
-
-### 14.6 Observability Checklist
-
-What I'd add before calling this "production-ready":
-
-**Metrics (Prometheus):**
-
-- `jobs_created_total{tenant_id, status}` — counter
-- `job_duration_seconds{stage=etl|anomaly|classify|summarise|persist}` — histogram
-- `worker_queue_depth{queue=default}` — gauge (from RQ)
-- `llm_call_duration_seconds{model, op=classify|summarise}` — histogram
-- `llm_call_failures_total{model, reason}` — counter
-- `http_requests_total{route, status}` — counter
-- `http_request_duration_seconds{route}` — histogram
-- `db_connection_pool_in_use` / `db_connection_pool_size` — gauges
-
-**Logs (structured JSON via `structlog`):**
-
-- Every request: `request_id`, `job_id`, `route`, `status`, `duration_ms`
-- Every worker task: `job_id`, `stage`, `rows_in`, `rows_out`, `quarantined`,
-  `duration_ms`, `llm_failures`
-- Every LLM call: `job_id`, `op`, `batch_size`, `attempt`, `latency_ms`,
-  `failed`
-
-**Traces (OpenTelemetry):**
-
-- Trace `POST /jobs/upload` → RQ task → ETL → LLM classify → LLM summarise →
-  DB writes, all under one `trace_id` so a slow job can be diagnosed from
-  the API log.
-
-**Alerts (initial set):**
-
-| Alert | Condition | Severity |
-|---|---|---|
-| Job failure rate spike | `rate(worker_failures[5m]) > 0.1` | P3 |
-| Worker queue depth growing | `rq_queue_depth > 1000 for 10m` | P2 |
-| LLM failure rate | `rate(llm_call_failures[5m]) > 0.05` | P3 |
-| API p99 latency | `http_request_duration_seconds:p99 > 2s for 10m` | P2 |
-| Disk usage on API host | `disk_used_percent > 80` | P2 |
-| Postgres connection pool exhaustion | `db_connection_pool_in_use / db_connection_pool_size > 0.9` | P1 |
-
-**Health checks beyond `/health`:**
-
-- `/health/live` — process is up (always 200 if reachable)
-- `/health/ready` — DB reachable, Redis reachable, JobStore responds to
-  `SELECT 1` (503 if any dep is down). Used by load balancer to take bad
-  pods out of rotation.
+1. `InMemoryJobStore` for unit tests + a true "no DB" `make dev` mode
+2. Alembic migrations with a baseline
+3. Idempotent upload endpoint (dedupe by file hash)
+4. Quarantine exposure in `/jobs/{id}/results`
+5. Per-job cancellation (`DELETE /jobs/{id}`)
+6. Structured JSON logs (`structlog`) + request-id correlation
 
 ---
 
