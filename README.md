@@ -498,7 +498,7 @@ For a 1,000-row CSV with 100 uncategorised rows, typical total job time is
 A single CSV upload traverses these stages. Each stage has a clear input/output
 contract, which is what makes the system debuggable.
 
-![Data flow — end to end](docs/images/image%20copy.png)
+![Data flow — end to end](docs/images/all-stage.png)
 
 **Read path** (client polling `/jobs/{id}/status` or `/results`) is just
 `SELECT … FROM jobs / transactions / job_summaries WHERE id = ?` — sub-10ms
