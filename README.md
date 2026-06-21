@@ -545,6 +545,10 @@ in production:
 
 How I'd grow this from "1 VM, demo workload" to "10k jobs/day":
 
+![Scaling strategy: four phases from single-host to event-sourced](docs/images/scalling.png)
+
+*Scaling strategy overview: Phase 1 (single host, today) → Phase 2 (horizontal workers, ~1k jobs/day) → Phase 3 (multi-host prod-grade, ~100k jobs/day) → Phase 4 (event-sourced, 1M+ jobs/day).*
+
 **Phase 1 — Single-host, vertical scale (today)**
 
 One API container + one worker container + Postgres + Redis on one host.
