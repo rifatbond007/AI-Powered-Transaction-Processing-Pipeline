@@ -8,15 +8,15 @@ small REST API.
 
 ## Table of Contents
 
-1. [Quick Start](#2-quick-start)
-2. [Architecture](#3-architecture)
-3. [API Contract](#4-api-contract)
-4. [System Design & Scaling](#6-system-design--scaling)
-   - [4.1 Data Flow](#62-data-flow)
-   - [4.2 Scaling Strategy](#65-scaling-strategy)
-5. [LLM Integration](#7-llm-integration)
-6. [Project Layout](#9-project-layout)
-7. [Testing](#10-testing)
+1. [Quick Start](#1-quick-start)
+2. [Architecture](#2-architecture)
+3. [API Contract](#3-api-contract)
+4. [System Design & Scaling](#4-system-design--scaling)
+   - [4.1 Data Flow](#41-data-flow)
+   - [4.2 Scaling Strategy](#42-scaling-strategy)
+5. [LLM Integration](#5-llm-integration)
+6. [Project Layout](#7-project-layout)
+7. [Testing](#8-testing)
 
 **See also:**
 
