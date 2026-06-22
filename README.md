@@ -75,7 +75,13 @@ deterministic-fallback summary all work.
 *FastAPI edge tier enqueues jobs into Redis/RQ, workers run ETL → anomaly → LLM classify → LLM summarise → Postgres, with external Gemini calls.*
 
 
-## 3. API Contract
+## 3. Data Model (ER Diagram)
+
+![ER diagram](docs/images/ER.png)
+
+---
+
+## 4. API Contract
 
 | Method | Path | Status Codes | Purpose |
 |---|---|---|---|
@@ -87,12 +93,12 @@ deterministic-fallback summary all work.
 
 
 
-## 4. System Design & Scaling
+## 5. System Design & Scaling
 
 A condensed view of how the system behaves under load. Full detail in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-### 4.1 Data Flow
+### 5.1 Data Flow
 
 ![Data flow — end to end](docs/images/all-stage.png)
 
@@ -105,7 +111,7 @@ stage has a clear input/output contract (see [docs/ARCHITECTURE.md §3](docs/ARC
 on Postgres.
 
 
-### 4.2 Scaling Strategy
+### 5.2 Scaling Strategy
 
 ![Scaling strategy: four phases from single-host to event-sourced](docs/images/scalling.png)
 
@@ -120,7 +126,7 @@ Full phase detail at [docs/ARCHITECTURE.md §5](docs/ARCHITECTURE.md#5-scaling-s
 
 
 
-## 5. LLM Integration
+## 6. LLM Integration
 
 - **Provider**: Gemini 2.5 Flash via `google-genai` (free tier, no spend).
   Configure with `GOOGLE_API_KEY`.
@@ -136,7 +142,7 @@ Provider isolated to `app/services/llm.py` — swapping is one file.
 
 ---
 
-## 6. Design Decisions & Tradeoffs
+## 7. Design Decisions & Tradeoffs
 
 | Decision | Rationale |
 |---|---|
@@ -151,7 +157,7 @@ Provider isolated to `app/services/llm.py` — swapping is one file.
 
 ---
 
-## 7. Project Layout
+## 8. Project Layout
 
 ```
 .
@@ -180,7 +186,7 @@ Provider isolated to `app/services/llm.py` — swapping is one file.
 
 ---
 
-## 8. Testing
+## 9. Testing
 
 ```bash
 make test         # full suite (~30 tests, < 5 s, no services)
